@@ -1,20 +1,28 @@
+message ChangePersend {
+    persent: Int as unit64;
+}
+
+
 contract ContestPayment {
     let owner: address;
     let feeExempt: Map<address, bool> = Map();
     let contestPayments: Map<Int, Map<address, (Int, String)>> = Map();
     let balances: Map<address, Int> = Map();
-
+    let persent: Int as unit64;
     init() {
         owner = msg.sender();
     }
-
+    receive(msg: ChangePersend){
+        throw_if(msg.sender() != owner, "Only owner can set winners");
+        persent.set(ChangePersend.persent)
+    }
     receive("pay") {
         let contestId: Int = msg.body().contestId;
         let sender: address = msg.sender();
         let amount: Int = msg.value();
 
         let isExempt: Bool = feeExempt.get(sender).getOrDefault(false);
-        let fee: Int = isExempt ? 0 : (amount * 5n) / 100n;
+        let fee: Int = isExempt ? 0 : (amount * persent) / 100n;
         let netAmount: Int = amount - fee;
 
         let contest = contestPayments.get(contestId).getOrDefault(Map());
