@@ -1,0 +1,402 @@
+ // SPDX-License-Identifier: MIT
+ pragma solidity ^0.8.0;
+
+ interface IERC20 {
+     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+     function transfer(address recipient, uint256 amount) external returns (bool);
+     function balanceOf(address account) external view returns (uint256);
+     function allowance(address owner, address spender) external view returns (uint256);
+ }
+
+ contract LuckContract {
+     address public owner;
+     address public commissionWallet;
+     uint256 public commissionPercentage; // Процент комиссии (например, 100 = 1%, 1000 = 10%)
+
+     // Список адресов, освобожденных от комиссии
+     mapping(address => bool) public noCommissionAddresses;
+
+     enum PrizeType { ETH, TOKEN }
+     enum ParticipantStatus { PARTICIPATED, WON, CLAIMED, LOST }
+     enum ContestStatus { ACTIVE, COMPLETED }
+
+     struct Contest {
+         uint256 id;
+         uint256 numberOfWinners;
+         uint256 endTime;
+         uint256 prizeAmount;
+         PrizeType prizeType;
+         address tokenAddress; // address(0) для ETH
+         ContestStatus status;
+         uint256 totalParticipants;
+     }
+
+     struct Participant {
+         address wallet;
+         uint256 userId;
+         uint256 contestId;
+         ParticipantStatus status;
+         uint256 prizeAmount;
+         bool hasClaimed;
+     }
+
+     // Маппинги для хранения данных
+     mapping(uint256 => Contest) public contests;
+     mapping(uint256 => mapping(uint256 => Participant)) public participants; // contestId => participantIndex => Participant
+     mapping(uint256 => uint256) public nextParticipantIndex; // contestId => nextIndex
+
+     uint256 public nextContestId = 1;
+
+     // События
+     event ContestCreated(
+         uint256 indexed contestId,
+         uint256 numberOfWinners,
+         uint256 endTime,
+         uint256 prizeAmount,
+         PrizeType prizeType,
+         address tokenAddress
+     );
+
+     event ParticipantJoined(
+         uint256 indexed contestId,
+         address indexed wallet,
+         uint256 userId
+     );
+
+     event ContestCompleted(
+         uint256 indexed contestId,
+         uint256[] winners
+     );
+
+     event PrizeClaimed(
+         uint256 indexed contestId,
+         address indexed winner,
+         uint256 amount
+     );
+
+     event CommissionWalletUpdated(address indexed newWallet);
+     event CommissionPercentageUpdated(uint256 newPercentage);
+     event NoCommissionAddressUpdated(address indexed _address, bool status);
+
+     // Добавляем новые события
+     event ContestPrizeUpdated(uint256 indexed contestId, uint256 newPrizeAmount);
+     event ContestDurationExtended(uint256 indexed contestId, uint256 newEndTime);
+     event ContestCancelled(uint256 indexed contestId, string reason);
+     event ParticipantRemoved(uint256 indexed contestId, address indexed participant, uint256 userId);
+     event ContestPrizeWithdrawn(uint256 indexed contestId, address indexed withdrawnBy, uint256 amount);
+
+     modifier onlyOwner() {
+         require(msg.sender == owner, "Only owner can call this function");
+         _;
+     }
+
+     modifier contestExists(uint256 contestId) {
+         require(contests[contestId].id != 0, "Contest does not exist");
+         _;
+     }
+
+     modifier contestActive(uint256 contestId) {
+         require(contests[contestId].status == ContestStatus.ACTIVE, "Contest is not active");
+         require(block.timestamp <= contests[contestId].endTime, "Contest has ended");
+         _;
+     }
+
+     constructor(address _commissionWallet, uint256 _commissionPercentage) {
+         owner = msg.sender;
+         commissionWallet = _commissionWallet;
+         commissionPercentage = _commissionPercentage;
+     }
+
+     // Функции управления комиссией
+     function setCommissionWallet(address _newWallet) external onlyOwner {
+         commissionWallet = _newWallet;
+         emit CommissionWalletUpdated(_newWallet);
+     }
+
+     function setCommissionPercentage(uint256 _newPercentage) external onlyOwner {
+         require(_newPercentage <= 10000, "Commission cannot exceed 100%");
+         commissionPercentage = _newPercentage;
+         emit CommissionPercentageUpdated(_newPercentage);
+     }
+
+     function setNoCommissionAddress(address _address, bool _status) external onlyOwner {
+         noCommissionAddresses[_address] = _status;
+         emit NoCommissionAddressUpdated(_address, _status);
+     }
+
+     // Внутренняя функция для расчета комиссии
+     function calculateCommission(uint256 amount, address _address) internal view returns (uint256) {
+         if (noCommissionAddresses[_address]) return 0;
+         return (amount * commissionPercentage) / 10000;
+     }
+
+     // Создание нового конкурса
+     function createContest(
+         uint256 numberOfWinners,
+         uint256 durationDays,
+         uint256 prizeAmount,
+         PrizeType prizeType,
+         address tokenAddress
+     ) external payable {
+         require(numberOfWinners > 0, "Number of winners must be greater than 0");
+         require(durationDays > 0, "Duration must be greater than 0");
+         require(prizeAmount > 0, "Prize amount must be greater than 0");
+
+         if (prizeType == PrizeType.ETH) {
+             require(msg.value >= prizeAmount, "Insufficient ETH sent for prize");
+         } else {
+             require(tokenAddress != address(0), "Token address cannot be zero");
+             IERC20 token = IERC20(tokenAddress);
+             require(token.allowance(msg.sender, address(this)) >= prizeAmount, "Insufficient token allowance");
+             require(token.transferFrom(msg.sender, address(this), prizeAmount), "Token transfer failed");
+         }
+
+         contests[nextContestId] = Contest({
+             id: nextContestId,
+             numberOfWinners: numberOfWinners,
+             endTime: block.timestamp + (durationDays * 1 days),
+             prizeAmount: prizeAmount,
+             prizeType: prizeType,
+             tokenAddress: tokenAddress,
+             status: ContestStatus.ACTIVE,
+             totalParticipants: 0
+         });
+
+         emit ContestCreated(
+             nextContestId,
+             numberOfWinners,
+             block.timestamp + (durationDays * 1 days),
+             prizeAmount,
+             prizeType,
+             tokenAddress
+         );
+
+         nextContestId++;
+     }
+
+     // Участие в конкурсе
+     function joinContest(uint256 contestId, uint256 userId) external contestExists(contestId) contestActive(contestId) {
+         Contest storage contest = contests[contestId];
+         require(contest.totalParticipants < contest.numberOfWinners * 1000, "Contest is full");
+
+         uint256 participantIndex = nextParticipantIndex[contestId];
+         participants[contestId][participantIndex] = Participant({
+             wallet: msg.sender,
+             userId: userId,
+             contestId: contestId,
+             status: ParticipantStatus.PARTICIPATED,
+             prizeAmount: 0,
+             hasClaimed: false
+         });
+
+         contest.totalParticipants++;
+         nextParticipantIndex[contestId]++;
+
+         emit ParticipantJoined(contestId, msg.sender, userId);
+     }
+
+     // Завершение конкурса и определение победителей
+     function completeContest(uint256 contestId, uint256[] calldata winnerIndices, uint256[] calldata prizeAmounts)
+         external
+         onlyOwner
+         contestExists(contestId)
+     {
+         Contest storage contest = contests[contestId];
+         require(contest.status == ContestStatus.ACTIVE, "Contest is not active");
+         require(block.timestamp > contest.endTime, "Contest has not ended yet");
+         require(winnerIndices.length == contest.numberOfWinners, "Invalid number of winners");
+         require(prizeAmounts.length == contest.numberOfWinners, "Invalid number of prize amounts");
+
+         uint256 totalPrizeAmount = 0;
+         for(uint256 i = 0; i < prizeAmounts.length; i++) {
+             totalPrizeAmount += prizeAmounts[i];
+         }
+         require(totalPrizeAmount <= contest.prizeAmount, "Total prize amount exceeds contest prize");
+
+         // Обновляем статусы победителей
+         for(uint256 i = 0; i < winnerIndices.length; i++) {
+             require(winnerIndices[i] < contest.totalParticipants, "Invalid winner index");
+             participants[contestId][winnerIndices[i]].status = ParticipantStatus.WON;
+             participants[contestId][winnerIndices[i]].prizeAmount = prizeAmounts[i];
+         }
+
+         // Обновляем статусы проигравших
+         for(uint256 i = 0; i < contest.totalParticipants; i++) {
+             if(participants[contestId][i].status == ParticipantStatus.PARTICIPATED) {
+                 participants[contestId][i].status = ParticipantStatus.LOST;
+             }
+         }
+
+         contest.status = ContestStatus.COMPLETED;
+         emit ContestCompleted(contestId, winnerIndices);
+     }
+
+     // Получение приза
+     function claimPrize(uint256 contestId, uint256 participantIndex) external {
+         Contest storage contest = contests[contestId];
+         require(contest.status == ContestStatus.COMPLETED, "Contest is not completed");
+
+         Participant storage participant = participants[contestId][participantIndex];
+         require(participant.wallet == msg.sender, "Not the prize winner");
+         require(participant.status == ParticipantStatus.WON, "Not a winner");
+         require(!participant.hasClaimed, "Prize already claimed");
+
+         uint256 prizeAmount = participant.prizeAmount;
+         uint256 commission = calculateCommission(prizeAmount, msg.sender);
+         uint256 finalAmount = prizeAmount - commission;
+
+         if(contest.prizeType == PrizeType.ETH) {
+             (bool commissionSuccess, ) = commissionWallet.call{value: commission}("");
+             require(commissionSuccess, "Commission transfer failed");
+
+             (bool success, ) = msg.sender.call{value: finalAmount}("");
+             require(success, "Prize transfer failed");
+         } else {
+             IERC20 token = IERC20(contest.tokenAddress);
+             require(token.transfer(commissionWallet, commission), "Commission transfer failed");
+             require(token.transfer(msg.sender, finalAmount), "Prize transfer failed");
+         }
+
+         participant.hasClaimed = true;
+         participant.status = ParticipantStatus.CLAIMED;
+
+         emit PrizeClaimed(contestId, msg.sender, prizeAmount);
+     }
+
+     // Функция для обновления призового фонда конкурса
+     function updateContestPrize(uint256 contestId, uint256 newPrizeAmount) internal  onlyOwner contestExists(contestId) {
+         Contest storage contest = contests[contestId];
+         require(contest.status == ContestStatus.ACTIVE, "Contest is not active");
+         require(newPrizeAmount > 0, "Prize amount must be greater than 0");
+
+         if(contest.prizeType == PrizeType.ETH) {
+             require(msg.value >= newPrizeAmount, "Insufficient ETH sent for new prize");
+         } else {
+             IERC20 token = IERC20(contest.tokenAddress);
+             require(token.allowance(msg.sender, address(this)) >= newPrizeAmount, "Insufficient token allowance");
+             require(token.transferFrom(msg.sender, address(this), newPrizeAmount), "Token transfer failed");
+         }
+
+         contest.prizeAmount = newPrizeAmount;
+         emit ContestPrizeUpdated(contestId, newPrizeAmount);
+     }
+
+     // Функция для продления срока конкурса
+     function extendContestDuration(uint256 contestId, uint256 additionalDays) external onlyOwner contestExists(contestId) {
+         Contest storage contest = contests[contestId];
+         require(contest.status == ContestStatus.ACTIVE, "Contest is not active");
+         require(additionalDays > 0, "Additional days must be greater than 0");
+
+         contest.endTime += (additionalDays * 1 days);
+         emit ContestDurationExtended(contestId, contest.endTime);
+     }
+
+     // Функция для отмены конкурса
+     function cancelContest(uint256 contestId, string calldata reason) external onlyOwner contestExists(contestId) {
+         Contest storage contest = contests[contestId];
+         require(contest.status == ContestStatus.ACTIVE, "Contest is not active");
+
+         contest.status = ContestStatus.COMPLETED;
+
+         // Возвращаем призовой фонд создателю конкурса
+         if(contest.prizeType == PrizeType.ETH) {
+             (bool success, ) = msg.sender.call{value: contest.prizeAmount}("");
+             require(success, "ETH refund failed");
+         } else {
+             IERC20 token = IERC20(contest.tokenAddress);
+             require(token.transfer(msg.sender, contest.prizeAmount), "Token refund failed");
+         }
+
+         emit ContestCancelled(contestId, reason);
+     }
+
+     // Функция для удаления участника из конкурса
+     function removeParticipant(uint256 contestId, uint256 participantIndex) external onlyOwner contestExists(contestId) {
+         Contest storage contest = contests[contestId];
+         require(contest.status == ContestStatus.ACTIVE, "Contest is not active");
+         require(participantIndex < contest.totalParticipants, "Invalid participant index");
+
+         Participant storage participant = participants[contestId][participantIndex];
+         require(participant.status == ParticipantStatus.PARTICIPATED, "Can only remove active participants");
+
+         // Сдвигаем последнего участника на место удаляемого
+         if(participantIndex < contest.totalParticipants - 1) {
+             participants[contestId][participantIndex] = participants[contestId][contest.totalParticipants - 1];
+         }
+
+         contest.totalParticipants--;
+         emit ParticipantRemoved(contestId, participant.wallet, participant.userId);
+     }
+
+     // Функция для вывода призового фонда (только для владельца)
+     function withdrawContestPrize(uint256 contestId) external onlyOwner contestExists(contestId) {
+         Contest storage contest = contests[contestId];
+         require(contest.status == ContestStatus.COMPLETED, "Contest must be completed");
+
+         uint256 remainingPrize = contest.prizeAmount;
+         for(uint256 i = 0; i < contest.totalParticipants; i++) {
+             if(participants[contestId][i].status == ParticipantStatus.WON) {
+                 remainingPrize -= participants[contestId][i].prizeAmount;
+             }
+         }
+
+         require(remainingPrize > 0, "No remaining prize to withdraw");
+
+         if(contest.prizeType == PrizeType.ETH) {
+             (bool success, ) = msg.sender.call{value: remainingPrize}("");
+             require(success, "ETH withdrawal failed");
+         } else {
+             IERC20 token = IERC20(contest.tokenAddress);
+             require(token.transfer(msg.sender, remainingPrize), "Token withdrawal failed");
+         }
+
+         emit ContestPrizeWithdrawn(contestId, msg.sender, remainingPrize);
+     }
+
+     // Геттеры
+     function getContest(uint256 contestId) external view returns (Contest memory) {
+         return contests[contestId];
+     }
+
+     function getParticipant(uint256 contestId, uint256 participantIndex) external view returns (Participant memory) {
+         return participants[contestId][participantIndex];
+     }
+
+     function getContestParticipants(uint256 contestId) external view returns (Participant[] memory) {
+         Contest storage contest = contests[contestId];
+         Participant[] memory result = new Participant[](contest.totalParticipants);
+         for(uint256 i = 0; i < contest.totalParticipants; i++) {
+             result[i] = participants[contestId][i];
+         }
+         return result;
+     }
+
+     function getContestWinners(uint256 contestId) external view returns (Participant[] memory) {
+         Contest storage contest = contests[contestId];
+         require(contest.status == ContestStatus.COMPLETED, "Contest is not completed");
+
+         uint256 winnerCount = 0;
+         for(uint256 i = 0; i < contest.totalParticipants; i++) {
+             if(participants[contestId][i].status == ParticipantStatus.WON ||
+                participants[contestId][i].status == ParticipantStatus.CLAIMED) {
+                 winnerCount++;
+             }
+         }
+
+         Participant[] memory winners = new Participant[](winnerCount);
+         uint256 currentIndex = 0;
+
+         for(uint256 i = 0; i < contest.totalParticipants; i++) {
+             if(participants[contestId][i].status == ParticipantStatus.WON ||
+                participants[contestId][i].status == ParticipantStatus.CLAIMED) {
+                 winners[currentIndex] = participants[contestId][i];
+                 currentIndex++;
+             }
+         }
+
+         return winners;
+     }
+
+     // Функция для приема ETH
+     receive() external payable {}
+ }
