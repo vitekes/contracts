@@ -1,0 +1,318 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+interface IERC20 {
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+    function transfer(address recipient, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+}
+
+contract PaymentSystem {
+    address public owner;
+    address public commissionWallet;
+    uint256 public commissionPercentage; // Процент комиссии (например, 100 = 1%, 1000 = 10%)
+    
+    enum PaymentType { SUBSCRIPTION }
+    enum PaymentMethod { ETH, TOKEN }
+    
+    struct Payment {
+        uint256 id;
+        address payer;
+        address recipient;
+        uint256 amount;
+        PaymentType paymentType;
+        PaymentMethod paymentMethod;
+        address tokenAddress; // address(0) для ETH
+        uint256 timestamp;
+        uint256 productId; // для платежей за товар
+    }
+    
+    struct Subscription {
+        address subscriber;
+        address recipient;
+        uint256 recipientId;
+        uint256 monthlyAmount;
+        uint256 durationMonths;
+        uint256 startTime;
+        uint256 lastPaymentTime;
+        bool isActive;
+        PaymentMethod paymentMethod;
+        address tokenAddress;
+    }
+    
+    mapping(uint256 => Payment) public payments;
+    mapping(address => Subscription[]) public subscriptions;
+    uint256 public nextPaymentId = 1;
+    
+    event PaymentProcessed(
+        uint256 indexed paymentId,
+        address indexed payer,
+        address indexed recipient,
+        uint256 amount,
+        PaymentType paymentType,
+        PaymentMethod paymentMethod,
+        address tokenAddress
+    );
+    
+    event SubscriptionCreated(
+        address indexed subscriber,
+        address indexed recipient,
+        uint256 recipientId,
+        uint256 monthlyAmount,
+        uint256 durationMonths
+    );
+    
+    event SubscriptionCancelled(
+        address indexed subscriber,
+        address indexed recipient,
+        uint256 recipientId
+    );
+    
+    event SubscriptionPaymentFailed(
+        address indexed subscriber,
+        address indexed recipient,
+        uint256 recipientId,
+        string reason
+    );
+    
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this function");
+        _;
+    }
+    
+    constructor(address _commissionWallet, uint256 _commissionPercentage) {
+        owner = msg.sender;
+        commissionWallet = _commissionWallet;
+        commissionPercentage = _commissionPercentage;
+    }
+    
+    // Функции для изменения комиссии и кошелька комиссии
+    function setCommissionWallet(address _newWallet) external onlyOwner {
+        commissionWallet = _newWallet;
+    }
+    
+    function setCommissionPercentage(uint256 _newPercentage) external onlyOwner {
+        require(_newPercentage <= 10000, "Commission cannot exceed 100%");
+        commissionPercentage = _newPercentage;
+    }
+    
+    // Внутренняя функция для расчета комиссии
+    function calculateCommission(uint256 amount) internal view returns (uint256) {
+        return (amount * commissionPercentage) / 10000;
+    }
+    
+    // 3. Подписка
+    function createSubscription(
+        address recipient,
+        uint256 recipientId,
+        uint256 monthlyAmount,
+        uint256 durationMonths,
+        address tokenAddress
+    ) external payable {
+        require(durationMonths > 0, "Duration must be greater than 0");
+        require(monthlyAmount > 0, "Monthly amount must be greater than 0");
+        
+        PaymentMethod paymentMethod = tokenAddress == address(0) ? PaymentMethod.ETH : PaymentMethod.TOKEN;
+        
+        // Создаем подписку
+        Subscription memory newSub = Subscription({
+            subscriber: msg.sender,
+            recipient: recipient,
+            recipientId: recipientId,
+            monthlyAmount: monthlyAmount,
+            durationMonths: durationMonths,
+            startTime: block.timestamp,
+            lastPaymentTime: block.timestamp,
+            isActive: true,
+            paymentMethod: paymentMethod,
+            tokenAddress: tokenAddress
+        });
+        
+        // Делаем первый платеж
+        if(paymentMethod == PaymentMethod.ETH) {
+            require(msg.value >= monthlyAmount, "Insufficient ETH sent");
+            uint256 commission = calculateCommission(monthlyAmount);
+            uint256 finalAmount = monthlyAmount - commission;
+            
+            (bool commissionSuccess, ) = commissionWallet.call{value: commission}("");
+            require(commissionSuccess, "Commission transfer failed");
+            
+            (bool success, ) = recipient.call{value: finalAmount}("");
+            require(success, "Initial subscription payment failed");
+            
+            // Возвращаем лишний ETH, если был отправлен
+            if(msg.value > monthlyAmount) {
+                (bool refundSuccess, ) = msg.sender.call{value: msg.value - monthlyAmount}("");
+                require(refundSuccess, "Refund failed");
+            }
+        } else {
+            IERC20 token = IERC20(tokenAddress);
+            require(token.allowance(msg.sender, address(this)) >= monthlyAmount, "Insufficient token allowance");
+            
+            uint256 commission = calculateCommission(monthlyAmount);
+            uint256 finalAmount = monthlyAmount - commission;
+            
+            require(token.transferFrom(msg.sender, commissionWallet, commission), "Commission transfer failed");
+            require(token.transferFrom(msg.sender, recipient, finalAmount), "Initial subscription payment failed");
+        }
+        
+        subscriptions[msg.sender].push(newSub);
+        
+        emit SubscriptionCreated(
+            msg.sender,
+            recipient,
+            recipientId,
+            monthlyAmount,
+            durationMonths
+        );
+        
+        _registerPayment(
+            msg.sender,
+            recipient,
+            monthlyAmount,
+            PaymentType.SUBSCRIPTION,
+            paymentMethod,
+            tokenAddress,
+            recipientId
+        );
+    }
+    
+    // Функция для отмены подписки
+    function cancelSubscription(uint256 subscriptionIndex) external {
+        require(subscriptionIndex < subscriptions[msg.sender].length, "Invalid subscription index");
+        require(subscriptions[msg.sender][subscriptionIndex].isActive, "Subscription already inactive");
+        
+        subscriptions[msg.sender][subscriptionIndex].isActive = false;
+        
+        emit SubscriptionCancelled(
+            msg.sender,
+            subscriptions[msg.sender][subscriptionIndex].recipient,
+            subscriptions[msg.sender][subscriptionIndex].recipientId
+        );
+    }
+    
+    // Функция для проверки и списания платежей по подпискам
+    function processSubscriptionPayments(address subscriber, uint256 subscriptionIndex) external {
+        Subscription storage sub = subscriptions[subscriber][subscriptionIndex];
+        require(sub.isActive, "Subscription is not active");
+        
+        // Проверяем, прошел ли месяц с последнего платежа
+        uint256 timeElapsed = block.timestamp - sub.lastPaymentTime;
+        require(timeElapsed >= 30 days, "Payment period has not elapsed");
+        
+        // Проверяем, не истекла ли подписка
+        uint256 totalDuration = sub.startTime + (sub.durationMonths * 30 days);
+        if(block.timestamp > totalDuration) {
+            sub.isActive = false;
+            emit SubscriptionCancelled(subscriber, sub.recipient, sub.recipientId);
+            return;
+        }
+        
+        if(sub.paymentMethod == PaymentMethod.ETH) {
+            // Проверяем баланс ETH
+            if(address(subscriber).balance < sub.monthlyAmount) {
+                sub.isActive = false;
+                emit SubscriptionPaymentFailed(subscriber, sub.recipient, sub.recipientId, "Insufficient ETH balance");
+                return;
+            }
+            
+            uint256 commission = calculateCommission(sub.monthlyAmount);
+            uint256 finalAmount = sub.monthlyAmount - commission;
+            
+            // Попытка списания ETH
+            (bool success, ) = sub.recipient.call{value: finalAmount}("");
+            if(!success) {
+                sub.isActive = false;
+                emit SubscriptionPaymentFailed(subscriber, sub.recipient, sub.recipientId, "ETH transfer failed");
+                return;
+            }
+            
+            (bool commissionSuccess, ) = commissionWallet.call{value: commission}("");
+            require(commissionSuccess, "Commission transfer failed");
+        } else {
+            IERC20 token = IERC20(sub.tokenAddress);
+            
+            // Проверяем баланс токенов и разрешение на списание
+            if(token.balanceOf(subscriber) < sub.monthlyAmount || 
+               token.allowance(subscriber, address(this)) < sub.monthlyAmount) {
+                sub.isActive = false;
+                emit SubscriptionPaymentFailed(subscriber, sub.recipient, sub.recipientId, "Insufficient token balance or allowance");
+                return;
+            }
+            
+            uint256 commission = calculateCommission(sub.monthlyAmount);
+            uint256 finalAmount = sub.monthlyAmount - commission;
+            
+            // Попытка списания токенов
+            bool commissionSuccess = token.transferFrom(subscriber, commissionWallet, commission);
+            bool transferSuccess = token.transferFrom(subscriber, sub.recipient, finalAmount);
+            
+            if(!commissionSuccess || !transferSuccess) {
+                sub.isActive = false;
+                emit SubscriptionPaymentFailed(subscriber, sub.recipient, sub.recipientId, "Token transfer failed");
+                return;
+            }
+        }
+        
+        sub.lastPaymentTime = block.timestamp;
+        
+        _registerPayment(
+            subscriber,
+            sub.recipient,
+            sub.monthlyAmount,
+            PaymentType.SUBSCRIPTION,
+            sub.paymentMethod,
+            sub.tokenAddress,
+            sub.recipientId
+        );
+    }
+    
+    // Внутренняя функция для регистрации платежей
+    function _registerPayment(
+        address payer,
+        address recipient,
+        uint256 amount,
+        PaymentType paymentType,
+        PaymentMethod paymentMethod,
+        address tokenAddress,
+        uint256 additionalId
+    ) internal {
+        payments[nextPaymentId] = Payment({
+            id: nextPaymentId,
+            payer: payer,
+            recipient: recipient,
+            amount: amount,
+            paymentType: paymentType,
+            paymentMethod: paymentMethod,
+            tokenAddress: tokenAddress,
+            timestamp: block.timestamp,
+            productId: additionalId
+        });
+        
+        emit PaymentProcessed(
+            nextPaymentId,
+            payer,
+            recipient,
+            amount,
+            paymentType,
+            paymentMethod,
+            tokenAddress
+        );
+        
+        nextPaymentId++;
+    }
+    
+    // Функция для получения информации о платеже
+    function getPayment(uint256 paymentId) external view returns (Payment memory) {
+        return payments[paymentId];
+    }
+    
+    // Функция для получения всех подписок пользователя
+    function getUserSubscriptions(address user) external view returns (Subscription[] memory) {
+        return subscriptions[user];
+    }
+    
+    // Функция для приема ETH
+    receive() external payable {}
+}
