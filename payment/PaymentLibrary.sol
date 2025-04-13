@@ -1,68 +1,68 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-library PaymentLibrary {
-    // Тип платежа
-    enum PaymentType {
-        GENERIC,    // Обычный платеж
-        PRODUCT,    // Покупка продукта
-        DONATION,   // Пожертвование
-        SUBSCRIPTION // Подписка
+library TransactionHelper {
+    // Тип транзакции
+    enum TransactionType {
+        BASIC,     // Обычная транзакция
+        PURCHASE,  // Покупка товара
+        SUPPORT,   // Поддержка
+        RECURRING  // Регулярный платеж
     }
     
-    // Статус платежа
-    enum PaymentStatus {
-        PENDING,    // Ожидает подтверждения
-        COMPLETED,  // Завершен
-        CANCELLED,  // Отменен
-        REFUNDED    // Возвращен
+    // Статус транзакции
+    enum TransactionStatus {
+        WAITING,   // Ожидает подтверждения
+        FINALIZED, // Завершена
+        REVOKED,   // Отменена
+        RETURNED   // Возвращена
     }
     
-    // Структура для хранения информации о платеже
-    struct Payment {
-        bytes32 id;            // Уникальный идентификатор платежа
-        address payer;         // Плательщик
-        address recipient;     // Получатель
-        uint256 amount;        // Сумма платежа
-        bool isEth;            // ETH или токен ERC20
-        address tokenAddress;  // Адрес токена (для ERC20)
-        uint256 timestamp;     // Время создания платежа
-        PaymentStatus status;  // Статус платежа
-        PaymentType paymentType; // Тип платежа
-        string metadata;       // Дополнительные данные (productId, message, subscriptionId)
+    // Структура для хранения информации о транзакции
+    struct Transaction {
+        bytes32 id;            // Уникальный идентификатор транзакции
+        address sender;        // Отправитель
+        address receiver;      // Получатель
+        uint256 value;         // Сумма транзакции
+        bool isNative;         // Нативная валюта или токен
+        address tokenContract; // Адрес контракта токена
+        uint256 timestamp;     // Время создания транзакции
+        TransactionStatus status;  // Статус транзакции
+        TransactionType transactionType; // Тип транзакции
+        string data;           // Дополнительные данные
     }
     
     // Информация о пользователе
-    struct UserInfo {
-        address preferredToken;  // Предпочитаемый токен для платежей
-        uint256 paymentCount;    // Количество совершенных платежей (для генерации nonce)
+    struct ClientInfo {
+        address defaultToken;  // Предпочитаемый токен для транзакций
+        uint256 transactionCount;  // Количество совершенных транзакций
     }
     
-    // Функция для отмены платежа
-    function cancelPayment(
-        mapping(bytes32 => Payment) storage payments,
-        bytes32 paymentId
+    // Функция для отмены транзакции
+    function revokeTransaction(
+        mapping(bytes32 => Transaction) storage transactions,
+        bytes32 transactionId
     ) external returns (bool) {
-        Payment storage payment = payments[paymentId];
+        Transaction storage transaction = transactions[transactionId];
         
-        require(payment.id == paymentId, "Payment does not exist");
-        require(payment.status == PaymentStatus.PENDING, "Payment cannot be cancelled");
+        require(transaction.id == transactionId, "Transaction does not exist");
+        require(transaction.status == TransactionStatus.WAITING, "Transaction cannot be revoked");
         
-        payment.status = PaymentStatus.CANCELLED;
+        transaction.status = TransactionStatus.REVOKED;
         return true;
     }
     
     // Функция для возврата средств
-    function refundPayment(
-        mapping(bytes32 => Payment) storage payments,
-        bytes32 paymentId
+    function returnTransaction(
+        mapping(bytes32 => Transaction) storage transactions,
+        bytes32 transactionId
     ) external returns (bool) {
-        Payment storage payment = payments[paymentId];
+        Transaction storage transaction = transactions[transactionId];
         
-        require(payment.id == paymentId, "Payment does not exist");
-        require(payment.status == PaymentStatus.COMPLETED, "Payment must be completed to refund");
+        require(transaction.id == transactionId, "Transaction does not exist");
+        require(transaction.status == TransactionStatus.FINALIZED, "Transaction must be finalized to return");
         
-        payment.status = PaymentStatus.REFUNDED;
+        transaction.status = TransactionStatus.RETURNED;
         return true;
     }
 } 

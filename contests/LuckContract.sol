@@ -7,7 +7,7 @@ import "./ContestManager.sol";
 import "./CommissionManager.sol";
 import "./PrizeManager.sol";
 
-contract ContestContract {
+contract LuckContract {
     address public owner;
     address public commissionWallet;
     uint256 public commissionPercentage; // Процент комиссии (например, 100 = 1%, 1000 = 10%)
