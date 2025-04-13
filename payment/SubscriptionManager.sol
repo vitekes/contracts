@@ -48,10 +48,10 @@ library SubscriptionManager {
         bool isEth,
         uint256 currentTimestamp
     ) external returns (bytes32) {
-        require(provider != address(0), "Адрес поставщика не может быть нулевым");
-        require(bytes(planId).length > 0, "ID плана не может быть пустым");
-        require(amount > 0, "Сумма должна быть больше нуля");
-        require(intervalDays > 0, "Интервал должен быть больше нуля");
+        require(provider != address(0), "The provider's address cannot be null");
+        require(bytes(planId).length > 0, "The planId cannot be empty");
+        require(amount > 0, "The amount must be greater than zero");
+        require(intervalDays > 0, "The interval must be greater than zero");
         
         // Генерируем уникальный ID подписки
         bytes32 subscriptionId = keccak256(abi.encodePacked(subscriber, provider, planId, block.timestamp));

@@ -299,7 +299,7 @@ contract PaymentSystem {
         bool _isEth
     ) internal returns (bytes32) {
         require(_recipient != address(0), "The recipient cannot be a null address");
-        require(_amount > 0, "Сумма должна быть больше нуля");
+        require(_amount > 0, "The amount must be greater than zero");
         
         // Получаем nonce для нового платежа
         uint256 nonce = userInfo[msg.sender].paymentCount;
