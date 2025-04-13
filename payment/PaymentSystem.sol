@@ -41,7 +41,7 @@ contract PaymentSystem {
     event SubscriptionCancelled(bytes32 subscriptionId, address subscriber, address provider);
     
     modifier onlyOwner() {
-        require(msg.sender == owner, "Не авторизован: только владелец может вызывать эту функцию");
+        require(msg.sender == owner, "Not authorized: only the owner can call this function");
         _;
     }
     
@@ -63,7 +63,7 @@ contract PaymentSystem {
      * @param _newWallet Новый адрес кошелька
      */
     function setCommissionWallet(address _newWallet) external onlyOwner {
-        require(_newWallet != address(0), "Новый кошелек не может быть нулевым адресом");
+        require(_newWallet != address(0), "The new wallet cannot be a null address");
         address oldWallet = commissionWallet;
         commissionWallet = _newWallet;
         emit CommissionWalletUpdated(oldWallet, _newWallet);
@@ -74,7 +74,7 @@ contract PaymentSystem {
      * @param _newPercentage Новый процент (в сотых долях)
      */
     function setCommissionPercentage(uint256 _newPercentage) external onlyOwner {
-        require(_newPercentage <= 10000, "Процент комиссии не может превышать 100%"); // Максимум 100%
+        require(_newPercentage <= 10000, "The commission percentage cannot exceed 100%"); // Максимум 100%
         uint256 oldPercentage = commissionPercentage;
         commissionPercentage = _newPercentage;
         emit CommissionPercentageUpdated(oldPercentage, _newPercentage);
@@ -153,10 +153,10 @@ contract PaymentSystem {
      */
     function validatePayment(uint256 _amount, bool _isEth) private view {
         if (_isEth) {
-            require(msg.value >= _amount, "Недостаточно ETH для платежа");
+            require(msg.value >= _amount, "Insufficient ETH for payment");
         } else {
             address tokenAddress = userInfo[msg.sender].preferredToken;
-            require(tokenAddress != address(0), "Не установлен предпочитаемый токен");
+            require(tokenAddress != address(0), "The preferred token is not set");
         }
     }
     
@@ -244,12 +244,12 @@ contract PaymentSystem {
     function renewSubscription(bytes32 _subscriptionId) external payable returns (bytes32) {
         SubscriptionManager.Subscription storage subscription = subscriptions[_subscriptionId];
         
-        require(subscription.subscriber == msg.sender, "Только подписчик может продлить подписку");
-        require(subscription.active, "Подписка не активна");
+        require(subscription.subscriber == msg.sender, "Only the subscriber can renew the subscription.");
+        require(subscription.active, "The subscription is not active");
         
         // Проверка оплаты
         if (subscription.isEth) {
-            require(msg.value >= subscription.amount, "Недостаточно ETH для продления подписки");
+            require(msg.value >= subscription.amount, "Insufficient ETH to renew your subscription");
         }
         
         // Создаем платеж для продления подписки
@@ -278,8 +278,8 @@ contract PaymentSystem {
         require(subscription.subscriber == msg.sender || 
                 subscription.provider == msg.sender || 
                 msg.sender == owner, 
-                "Нет прав для отмены подписки");
-        require(subscription.active, "Подписка не активна");
+                "You cannot cancel another user's subscription.");
+        require(subscription.active, "The subscription is not active");
         
         SubscriptionManager.deactivateSubscription(subscriptions, _subscriptionId);
         
@@ -298,7 +298,7 @@ contract PaymentSystem {
         uint256 _amount,
         bool _isEth
     ) internal returns (bytes32) {
-        require(_recipient != address(0), "Получатель не может быть нулевым адресом");
+        require(_recipient != address(0), "The recipient cannot be a null address");
         require(_amount > 0, "Сумма должна быть больше нуля");
         
         // Получаем nonce для нового платежа
@@ -308,11 +308,11 @@ contract PaymentSystem {
         // Обрабатываем токен, если это не ETH
         if (!_isEth) {
             address tokenAddress = userInfo[msg.sender].preferredToken;
-            require(tokenAddress != address(0), "Не установлен предпочитаемый токен");
+            require(tokenAddress != address(0), "The preferred token is not set");
             
             IERC20 token = IERC20(tokenAddress);
-            require(token.allowance(msg.sender, address(this)) >= _amount, "Недостаточно разрешений для токена");
-            require(token.transferFrom(msg.sender, address(this), _amount), "Перевод токена не удался");
+            require(token.allowance(msg.sender, address(this)) >= _amount, "Token is not allowed");
+            require(token.transferFrom(msg.sender, address(this), _amount), "Token transfer failed");
         }
         
         // Создаем запись о платеже
@@ -382,22 +382,22 @@ contract PaymentSystem {
             // Отправка комиссии, если она не нулевая
             if (_commissionAmount > 0) {
                 (bool commissionSuccess, ) = _commissionWallet.call{value: _commissionAmount}("");
-                require(commissionSuccess, "Перевод комиссии не удался");
+                require(commissionSuccess, "The transfer of the commission failed");
             }
             
             // Отправка средств получателю
             (bool recipientSuccess, ) = _recipient.call{value: _recipientAmount}("");
-            require(recipientSuccess, "Перевод получателю не удался");
+            require(recipientSuccess, "The transfer to the recipient failed");
         } else {
             IERC20 token = IERC20(userInfo[msg.sender].preferredToken);
             
             // Отправка комиссии, если она не нулевая
             if (_commissionAmount > 0) {
-                require(token.transfer(_commissionWallet, _commissionAmount), "Перевод комиссии токеном не удался");
+                require(token.transfer(_commissionWallet, _commissionAmount), "The transfer of the commission by token failed");
             }
             
             // Отправка средств получателю
-            require(token.transfer(_recipient, _recipientAmount), "Перевод токеном получателю не удался");
+            require(token.transfer(_recipient, _recipientAmount), "The transfer of the token to the recipient failed");
         }
     }
     
@@ -406,7 +406,7 @@ contract PaymentSystem {
      * @param _tokenAddress Адрес токена ERC20
      */
     function setPreferredToken(address _tokenAddress) external {
-        require(_tokenAddress != address(0), "Адрес токена не может быть нулевым");
+        require(_tokenAddress != address(0), "The token address cannot be null");
         userInfo[msg.sender].preferredToken = _tokenAddress;
     }
     

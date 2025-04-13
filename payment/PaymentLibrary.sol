@@ -54,8 +54,8 @@ library PaymentLibrary {
     ) external returns (bool) {
         Payment storage payment = payments[paymentId];
         
-        require(payment.id == paymentId, "Платеж не существует");
-        require(payment.status == PaymentStatus.PENDING, "Платеж нельзя отменить");
+        require(payment.id == paymentId, "The payment does not exist");
+        require(payment.status == PaymentStatus.PENDING, "The payment cannot be cancelled");
         
         payment.status = PaymentStatus.CANCELLED;
         return true;
@@ -73,8 +73,8 @@ library PaymentLibrary {
     ) external returns (bool) {
         Payment storage payment = payments[paymentId];
         
-        require(payment.id == paymentId, "Платеж не существует");
-        require(payment.status == PaymentStatus.COMPLETED, "Платеж должен быть завершен для возврата");
+        require(payment.id == paymentId, "The payment does not exist");
+        require(payment.status == PaymentStatus.COMPLETED, "The payment must be completed for a refund");
         
         payment.status = PaymentStatus.REFUNDED;
         return true;

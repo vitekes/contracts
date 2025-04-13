@@ -91,10 +91,10 @@ library SubscriptionManager {
     ) external returns (bool) {
         Subscription storage subscription = subscriptions[subscriptionId];
         
-        require(subscription.id == subscriptionId, "Подписка не существует");
-        require(subscription.active, "Подписка не активна");
-        require(newAmount > 0, "Новая сумма должна быть больше нуля");
-        require(newIntervalDays > 0, "Новый интервал должен быть больше нуля");
+        require(subscription.id == subscriptionId, "The subscription does not exist");
+        require(subscription.active, "The subscription is no longer active");
+        require(newAmount > 0, "The new amount must be greater than zero");
+        require(newIntervalDays > 0, "The new interval must be greater than zero");
         
         subscription.amount = newAmount;
         subscription.intervalDays = newIntervalDays;
@@ -118,8 +118,8 @@ library SubscriptionManager {
     ) external returns (bool) {
         Subscription storage subscription = subscriptions[subscriptionId];
         
-        require(subscription.id == subscriptionId, "Подписка не существует");
-        require(!subscription.active, "Подписка уже активна");
+        require(subscription.id == subscriptionId, "The subscription does not exist");
+        require(!subscription.active, "The subscription is already active");
         
         subscription.active = true;
         subscription.nextPaymentTimestamp = currentTimestamp + (subscription.intervalDays * 1 days);
@@ -141,8 +141,8 @@ library SubscriptionManager {
     ) external returns (bool) {
         Subscription storage subscription = subscriptions[subscriptionId];
         
-        require(subscription.id == subscriptionId, "Подписка не существует");
-        require(subscription.active, "Подписка уже неактивна");
+        require(subscription.id == subscriptionId, "The subscription does not exist");
+        require(subscription.active, "The subscription is no longer active");
         
         subscription.active = false;
         
