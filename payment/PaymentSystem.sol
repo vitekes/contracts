@@ -103,7 +103,7 @@ contract FinancialOperator {
     }
     
     // Функции для отправки поддержки (донатов)
-    function sendSupport(
+    function donate(
         address _receiver, 
         string calldata _message,
         uint256 _value,
