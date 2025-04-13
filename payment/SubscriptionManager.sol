@@ -1,188 +1,237 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-library RecurringPaymentService {
-    // Структура для хранения информации о регулярном платеже
-    struct RecurringPayment {
-        bytes32 id;                  // Уникальный идентификатор платежа
-        address client;              // Клиент
-        address merchant;            // Получатель платежа
-        string planCode;             // Код тарифного плана
+/**
+ * @title SubscriptionManager - Библиотека для управления подписками
+ * @dev Содержит структуры данных и функции для работы с периодическими платежами
+ */
+library SubscriptionManager {
+    // Структура для хранения информации о подписке
+    struct Subscription {
+        bytes32 id;                  // Уникальный идентификатор подписки
+        address subscriber;          // Подписчик
+        address provider;            // Поставщик услуг
+        string planId;               // Идентификатор плана подписки
         uint256 amount;              // Сумма регулярного платежа
-        uint256 period;              // Период между платежами в днях
-        uint256 createdAt;           // Время создания регулярного платежа
-        uint256 nextPaymentAt;       // Время следующего платежа
-        bool isNativeToken;          // Нативный токен или ERC20 токен
-        bool enabled;                // Активен ли регулярный платеж
+        uint256 intervalDays;        // Интервал между платежами в днях
+        uint256 startTimestamp;      // Время начала подписки
+        uint256 nextPaymentTimestamp; // Время следующего платежа
+        bool isEth;                  // ETH или токен ERC20
+        bool active;                 // Активна ли подписка
     }
     
     // События
-    event RecurringPaymentCreated(bytes32 paymentId, address client, address merchant, string planCode);
-    event RecurringPaymentUpdated(bytes32 paymentId, uint256 newAmount, uint256 newPeriod);
-    event RecurringPaymentEnabled(bytes32 paymentId);
-    event RecurringPaymentDisabled(bytes32 paymentId);
+    event SubscriptionCreated(bytes32 subscriptionId, address subscriber, address provider, string planId);
+    event SubscriptionUpdated(bytes32 subscriptionId, uint256 newAmount, uint256 newIntervalDays);
+    event SubscriptionActivated(bytes32 subscriptionId);
+    event SubscriptionDeactivated(bytes32 subscriptionId);
     
-    // Функция для создания нового регулярного платежа
-    function createRecurringPayment(
-        mapping(bytes32 => RecurringPayment) storage recurringPayments,
-        address client,
-        address merchant,
-        string memory planCode,
+    /**
+     * @dev Создает новую подписку
+     * @param subscriptions Маппинг подписок
+     * @param subscriber Адрес подписчика
+     * @param provider Адрес поставщика услуг
+     * @param planId Идентификатор плана подписки
+     * @param amount Сумма регулярного платежа
+     * @param intervalDays Интервал между платежами в днях
+     * @param isEth Использовать ETH или токен ERC20
+     * @param currentTimestamp Текущее время
+     * @return ID созданной подписки
+     */
+    function createSubscription(
+        mapping(bytes32 => Subscription) storage subscriptions,
+        address subscriber,
+        address provider,
+        string memory planId,
         uint256 amount,
-        uint256 period,
-        bool isNativeToken,
-        uint256 currentTime
+        uint256 intervalDays,
+        bool isEth,
+        uint256 currentTimestamp
     ) external returns (bytes32) {
-        require(merchant != address(0), "Merchant cannot be zero address");
-        require(bytes(planCode).length > 0, "Plan code cannot be empty");
-        require(amount > 0, "Amount must be greater than zero");
-        require(period > 0, "Period must be greater than zero");
+        require(provider != address(0), "Адрес поставщика не может быть нулевым");
+        require(bytes(planId).length > 0, "ID плана не может быть пустым");
+        require(amount > 0, "Сумма должна быть больше нуля");
+        require(intervalDays > 0, "Интервал должен быть больше нуля");
         
-        // Генерируем уникальный ID регулярного платежа
-        bytes32 paymentId = keccak256(abi.encodePacked(client, merchant, planCode, block.timestamp));
+        // Генерируем уникальный ID подписки
+        bytes32 subscriptionId = keccak256(abi.encodePacked(subscriber, provider, planId, block.timestamp));
         
-        // Создаем новый регулярный платеж
-        recurringPayments[paymentId] = RecurringPayment({
-            id: paymentId,
-            client: client,
-            merchant: merchant,
-            planCode: planCode,
+        // Создаем новую подписку
+        subscriptions[subscriptionId] = Subscription({
+            id: subscriptionId,
+            subscriber: subscriber,
+            provider: provider,
+            planId: planId,
             amount: amount,
-            period: period,
-            createdAt: currentTime,
-            nextPaymentAt: currentTime + (period * 1 days),
-            isNativeToken: isNativeToken,
-            enabled: true
+            intervalDays: intervalDays,
+            startTimestamp: currentTimestamp,
+            nextPaymentTimestamp: currentTimestamp + (intervalDays * 1 days),
+            isEth: isEth,
+            active: true
         });
         
-        emit RecurringPaymentCreated(paymentId, client, merchant, planCode);
+        emit SubscriptionCreated(subscriptionId, subscriber, provider, planId);
         
-        return paymentId;
+        return subscriptionId;
     }
     
-    // Функция для обновления параметров регулярного платежа
-    function updateRecurringPayment(
-        mapping(bytes32 => RecurringPayment) storage recurringPayments,
-        bytes32 paymentId,
+    /**
+     * @dev Обновляет параметры подписки
+     * @param subscriptions Маппинг подписок
+     * @param subscriptionId ID подписки
+     * @param newAmount Новая сумма регулярного платежа
+     * @param newIntervalDays Новый интервал между платежами
+     * @return Успешность операции
+     */
+    function updateSubscription(
+        mapping(bytes32 => Subscription) storage subscriptions,
+        bytes32 subscriptionId,
         uint256 newAmount,
-        uint256 newPeriod
+        uint256 newIntervalDays
     ) external returns (bool) {
-        RecurringPayment storage recurringPayment = recurringPayments[paymentId];
+        Subscription storage subscription = subscriptions[subscriptionId];
         
-        require(recurringPayment.id == paymentId, "Recurring payment does not exist");
-        require(recurringPayment.enabled, "Recurring payment is not enabled");
-        require(newAmount > 0, "New amount must be greater than zero");
-        require(newPeriod > 0, "New period must be greater than zero");
+        require(subscription.id == subscriptionId, "Подписка не существует");
+        require(subscription.active, "Подписка не активна");
+        require(newAmount > 0, "Новая сумма должна быть больше нуля");
+        require(newIntervalDays > 0, "Новый интервал должен быть больше нуля");
         
-        recurringPayment.amount = newAmount;
-        recurringPayment.period = newPeriod;
+        subscription.amount = newAmount;
+        subscription.intervalDays = newIntervalDays;
         
-        emit RecurringPaymentUpdated(paymentId, newAmount, newPeriod);
+        emit SubscriptionUpdated(subscriptionId, newAmount, newIntervalDays);
         
         return true;
     }
     
-    // Функция для активации регулярного платежа
-    function enableRecurringPayment(
-        mapping(bytes32 => RecurringPayment) storage recurringPayments,
-        bytes32 paymentId,
-        uint256 currentTime
+    /**
+     * @dev Активирует подписку
+     * @param subscriptions Маппинг подписок
+     * @param subscriptionId ID подписки
+     * @param currentTimestamp Текущее время
+     * @return Успешность операции
+     */
+    function activateSubscription(
+        mapping(bytes32 => Subscription) storage subscriptions,
+        bytes32 subscriptionId,
+        uint256 currentTimestamp
     ) external returns (bool) {
-        RecurringPayment storage recurringPayment = recurringPayments[paymentId];
+        Subscription storage subscription = subscriptions[subscriptionId];
         
-        require(recurringPayment.id == paymentId, "Recurring payment does not exist");
-        require(!recurringPayment.enabled, "Recurring payment is already enabled");
+        require(subscription.id == subscriptionId, "Подписка не существует");
+        require(!subscription.active, "Подписка уже активна");
         
-        recurringPayment.enabled = true;
-        recurringPayment.nextPaymentAt = currentTime + (recurringPayment.period * 1 days);
+        subscription.active = true;
+        subscription.nextPaymentTimestamp = currentTimestamp + (subscription.intervalDays * 1 days);
         
-        emit RecurringPaymentEnabled(paymentId);
+        emit SubscriptionActivated(subscriptionId);
         
         return true;
     }
     
-    // Функция для деактивации регулярного платежа
-    function disableRecurringPayment(
-        mapping(bytes32 => RecurringPayment) storage recurringPayments,
-        bytes32 paymentId
+    /**
+     * @dev Деактивирует подписку
+     * @param subscriptions Маппинг подписок
+     * @param subscriptionId ID подписки
+     * @return Успешность операции
+     */
+    function deactivateSubscription(
+        mapping(bytes32 => Subscription) storage subscriptions,
+        bytes32 subscriptionId
     ) external returns (bool) {
-        RecurringPayment storage recurringPayment = recurringPayments[paymentId];
+        Subscription storage subscription = subscriptions[subscriptionId];
         
-        require(recurringPayment.id == paymentId, "Recurring payment does not exist");
-        require(recurringPayment.enabled, "Recurring payment is already disabled");
+        require(subscription.id == subscriptionId, "Подписка не существует");
+        require(subscription.active, "Подписка уже неактивна");
         
-        recurringPayment.enabled = false;
+        subscription.active = false;
         
-        emit RecurringPaymentDisabled(paymentId);
+        emit SubscriptionDeactivated(subscriptionId);
         
         return true;
     }
     
-    // Функция для получения списка регулярных платежей клиента
-    function getClientRecurringPayments(
-        mapping(bytes32 => RecurringPayment) storage recurringPayments,
-        bytes32[] memory allPaymentIds,
-        address client
+    /**
+     * @dev Получает список подписок пользователя
+     * @param subscriptions Маппинг подписок
+     * @param allSubscriptionIds Массив всех ID подписок
+     * @param user Адрес пользователя
+     * @return Массив ID подписок пользователя
+     */
+    function getUserSubscriptions(
+        mapping(bytes32 => Subscription) storage subscriptions,
+        bytes32[] memory allSubscriptionIds,
+        address user
     ) external view returns (bytes32[] memory) {
-        // Сначала подсчитываем количество регулярных платежей клиента
+        // Подсчитываем количество подписок пользователя
         uint256 count = 0;
-        for (uint256 i = 0; i < allPaymentIds.length; i++) {
-            if (recurringPayments[allPaymentIds[i]].client == client) {
+        for (uint256 i = 0; i < allSubscriptionIds.length; i++) {
+            if (subscriptions[allSubscriptionIds[i]].subscriber == user) {
                 count++;
             }
         }
         
         // Создаем массив подходящего размера
-        bytes32[] memory clientPayments = new bytes32[](count);
+        bytes32[] memory userSubscriptions = new bytes32[](count);
         
         // Заполняем массив
         uint256 index = 0;
-        for (uint256 i = 0; i < allPaymentIds.length; i++) {
-            if (recurringPayments[allPaymentIds[i]].client == client) {
-                clientPayments[index] = allPaymentIds[i];
+        for (uint256 i = 0; i < allSubscriptionIds.length; i++) {
+            if (subscriptions[allSubscriptionIds[i]].subscriber == user) {
+                userSubscriptions[index] = allSubscriptionIds[i];
                 index++;
             }
         }
         
-        return clientPayments;
+        return userSubscriptions;
     }
     
-    // Функция для получения списка регулярных платежей продавца
-    function getMerchantRecurringPayments(
-        mapping(bytes32 => RecurringPayment) storage recurringPayments,
-        bytes32[] memory allPaymentIds,
-        address merchant
+    /**
+     * @dev Получает список подписок поставщика услуг
+     * @param subscriptions Маппинг подписок
+     * @param allSubscriptionIds Массив всех ID подписок
+     * @param provider Адрес поставщика услуг
+     * @return Массив ID подписок поставщика
+     */
+    function getProviderSubscriptions(
+        mapping(bytes32 => Subscription) storage subscriptions,
+        bytes32[] memory allSubscriptionIds,
+        address provider
     ) external view returns (bytes32[] memory) {
-        // Сначала подсчитываем количество регулярных платежей продавца
+        // Подсчитываем количество подписок поставщика
         uint256 count = 0;
-        for (uint256 i = 0; i < allPaymentIds.length; i++) {
-            if (recurringPayments[allPaymentIds[i]].merchant == merchant) {
+        for (uint256 i = 0; i < allSubscriptionIds.length; i++) {
+            if (subscriptions[allSubscriptionIds[i]].provider == provider) {
                 count++;
             }
         }
         
         // Создаем массив подходящего размера
-        bytes32[] memory merchantPayments = new bytes32[](count);
+        bytes32[] memory providerSubscriptions = new bytes32[](count);
         
         // Заполняем массив
         uint256 index = 0;
-        for (uint256 i = 0; i < allPaymentIds.length; i++) {
-            if (recurringPayments[allPaymentIds[i]].merchant == merchant) {
-                merchantPayments[index] = allPaymentIds[i];
+        for (uint256 i = 0; i < allSubscriptionIds.length; i++) {
+            if (subscriptions[allSubscriptionIds[i]].provider == provider) {
+                providerSubscriptions[index] = allSubscriptionIds[i];
                 index++;
             }
         }
         
-        return merchantPayments;
+        return providerSubscriptions;
     }
     
-    // Вспомогательная функция для преобразования bytes32 в строку
-    function recurringPaymentIdToString(bytes32 paymentId) external pure returns (string memory) {
+    /**
+     * @dev Преобразует bytes32 в строку
+     * @param subscriptionId ID подписки
+     * @return Строковое представление ID
+     */
+    function subscriptionIdToString(bytes32 subscriptionId) external pure returns (string memory) {
         bytes memory result = new bytes(64);
         bytes memory characters = "0123456789abcdef";
         
         for (uint256 i = 0; i < 32; i++) {
-            uint8 value = uint8(paymentId[i]);
+            uint8 value = uint8(subscriptionId[i]);
             result[i * 2] = characters[uint8(value >> 4)];
             result[i * 2 + 1] = characters[uint8(value & 0x0f)];
         }

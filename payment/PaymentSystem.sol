@@ -1,366 +1,472 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "./ITokenStandard.sol";
-import "./TransactionHelper.sol";
-import "./RecurringPaymentService.sol";
+import "./IERC20.sol";
+import "./PaymentLibrary.sol";
+import "./SubscriptionManager.sol";
 
-contract FinancialOperator {
-    address public admin;
-    address public feeCollector;
-    uint256 public feeRate; // в сотых долях процента (например, 100 = 1%, 1000 = 10%)
+/**
+ * @title PaymentSystem - Система платежей и управления подписками
+ * @dev Основной контракт для управления финансовыми операциями в сети Ethereum
+ */
+contract PaymentSystem {
+    address public owner;
+    address public commissionWallet;
+    uint256 public commissionPercentage; // в сотых долях процента (например, 100 = 1%, 1000 = 10%)
     
     // Список адресов, освобожденных от комиссии
-    mapping(address => bool) public feeExemptions;
+    mapping(address => bool) public noCommissionAddresses;
     
-    // Маппинги для управления транзакциями
-    mapping(bytes32 => TransactionHelper.Transaction) private transactions;
-    mapping(address => TransactionHelper.ClientInfo) private clientsInfo;
+    // Маппинги для управления платежами
+    mapping(bytes32 => PaymentLibrary.Payment) private payments;
+    mapping(address => PaymentLibrary.UserInfo) private userInfo;
     
-    // Маппинг для регулярных платежей
-    mapping(bytes32 => RecurringPaymentService.RecurringPayment) private recurringPayments;
+    // Маппинг для подписок
+    mapping(bytes32 => SubscriptionManager.Subscription) private subscriptions;
     
     // События
-    event TransactionCreated(bytes32 transactionId, uint256 value, address sender, address receiver);
-    event TransactionProcessed(bytes32 transactionId, uint256 value, uint256 fee, address sender, address receiver);
-    event TransactionRevoked(bytes32 transactionId, address sender, address receiver);
-    event TransactionReturned(bytes32 transactionId, uint256 value, address sender);
+    event PaymentCreated(bytes32 paymentId, uint256 amount, address payer, address recipient);
+    event PaymentCompleted(bytes32 paymentId, uint256 amount, uint256 commission, address payer, address recipient);
+    event PaymentCancelled(bytes32 paymentId, address payer, address recipient);
+    event PaymentRefunded(bytes32 paymentId, uint256 amount, address payer);
     
-    event FeeCollectorUpdated(address oldCollector, address newCollector);
-    event FeeRateUpdated(uint256 oldRate, uint256 newRate);
-    event FeeExemptionStatusUpdated(address user, bool status);
+    event CommissionWalletUpdated(address oldWallet, address newWallet);
+    event CommissionPercentageUpdated(uint256 oldPercentage, uint256 newPercentage);
+    event NoCommissionStatusUpdated(address user, bool status);
     
-    event ItemPurchased(bytes32 transactionId, string itemId, uint256 value, address buyer, address seller);
-    event SupportSent(bytes32 transactionId, string message, uint256 value, address supporter, address receiver);
-    event RecurringPaymentStarted(bytes32 paymentId, string planCode, uint256 value, address client, address merchant);
-    event RecurringPaymentRenewed(bytes32 paymentId, uint256 value, address client, address merchant);
-    event RecurringPaymentCancelled(bytes32 paymentId, address client, address merchant);
+    event ProductPurchased(bytes32 paymentId, string productId, uint256 amount, address buyer, address seller);
+    event DonationMade(bytes32 paymentId, string message, uint256 amount, address donor, address recipient);
+    event SubscriptionStarted(bytes32 subscriptionId, string planId, uint256 amount, address subscriber, address provider);
+    event SubscriptionRenewed(bytes32 subscriptionId, uint256 amount, address subscriber, address provider);
+    event SubscriptionCancelled(bytes32 subscriptionId, address subscriber, address provider);
     
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "Доступ запрещен: только администратор может вызвать эту функцию");
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Не авторизован: только владелец может вызывать эту функцию");
         _;
     }
     
-    constructor(address _feeCollector, uint256 _feeRate) {
-        admin = msg.sender;
-        feeCollector = _feeCollector;
-        feeRate = _feeRate;
+    /**
+     * @dev Конструктор контракта
+     * @param _commissionWallet Адрес кошелька для комиссий
+     * @param _commissionPercentage Процент комиссии (в сотых долях)
+     */
+    constructor(address _commissionWallet, uint256 _commissionPercentage) {
+        owner = msg.sender;
+        commissionWallet = _commissionWallet;
+        commissionPercentage = _commissionPercentage;
     }
     
     // Функции управления комиссией
-    function setFeeCollector(address _newCollector) external onlyAdmin {
-        require(_newCollector != address(0), "Новый адрес сбора комиссии не может быть нулевым");
-        address oldCollector = feeCollector;
-        feeCollector = _newCollector;
-        emit FeeCollectorUpdated(oldCollector, _newCollector);
+    
+    /**
+     * @dev Устанавливает новый адрес для комиссий
+     * @param _newWallet Новый адрес кошелька
+     */
+    function setCommissionWallet(address _newWallet) external onlyOwner {
+        require(_newWallet != address(0), "Новый кошелек не может быть нулевым адресом");
+        address oldWallet = commissionWallet;
+        commissionWallet = _newWallet;
+        emit CommissionWalletUpdated(oldWallet, _newWallet);
     }
     
-    function setFeeRate(uint256 _newRate) external onlyAdmin {
-        require(_newRate <= 10000, "Ставка комиссии не может превышать 100%"); // Максимум 100%
-        uint256 oldRate = feeRate;
-        feeRate = _newRate;
-        emit FeeRateUpdated(oldRate, _newRate);
+    /**
+     * @dev Устанавливает новый процент комиссии
+     * @param _newPercentage Новый процент (в сотых долях)
+     */
+    function setCommissionPercentage(uint256 _newPercentage) external onlyOwner {
+        require(_newPercentage <= 10000, "Процент комиссии не может превышать 100%"); // Максимум 100%
+        uint256 oldPercentage = commissionPercentage;
+        commissionPercentage = _newPercentage;
+        emit CommissionPercentageUpdated(oldPercentage, _newPercentage);
     }
     
-    function setFeeExemption(address _account, bool _status) external onlyAdmin {
-        feeExemptions[_account] = _status;
-        emit FeeExemptionStatusUpdated(_account, _status);
+    /**
+     * @dev Устанавливает статус освобождения от комиссии
+     * @param _address Адрес пользователя
+     * @param _status Статус освобождения
+     */
+    function setNoCommissionAddress(address _address, bool _status) external onlyOwner {
+        noCommissionAddresses[_address] = _status;
+        emit NoCommissionStatusUpdated(_address, _status);
     }
     
     // Вспомогательные функции
-    function calculateFee(uint256 _value, address _sender) internal view returns (uint256) {
-        if (feeExemptions[_sender]) {
+    
+    /**
+     * @dev Рассчитывает комиссию для платежа
+     * @param _amount Сумма платежа
+     * @param _payer Адрес плательщика
+     * @return Сумма комиссии
+     */
+    function calculateCommission(uint256 _amount, address _payer) internal view returns (uint256) {
+        if (noCommissionAddresses[_payer]) {
             return 0;
         }
-        return (_value * feeRate) / 10000;
+        return (_amount * commissionPercentage) / 10000;
     }
     
-    function generateTransactionId(address _sender, address _receiver, uint256 _nonce) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(_sender, _receiver, _nonce));
+    /**
+     * @dev Генерирует уникальный ID платежа
+     * @param _payer Адрес плательщика
+     * @param _recipient Адрес получателя
+     * @param _nonce Порядковый номер платежа
+     * @return ID платежа
+     */
+    function generatePaymentId(address _payer, address _recipient, uint256 _nonce) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(_payer, _recipient, _nonce));
     }
     
-    // Функции для покупки товаров
-    function purchaseItem(
+    /**
+     * @dev Покупка продукта
+     * @param _seller Адрес продавца
+     * @param _productId ID продукта
+     * @param _amount Сумма платежа
+     * @param _isEth Использовать ETH или токен ERC20
+     * @return ID платежа
+     */
+    function purchaseProduct(
         address _seller, 
-        string calldata _itemId,
-        uint256 _value,
-        bool _isNative
+        string calldata _productId,
+        uint256 _amount,
+        bool _isEth
     ) external payable returns (bytes32) {
         // Проверка оплаты
-        validatePayment(_value, _isNative);
+        validatePayment(_amount, _isEth);
         
-        // Создаем транзакцию
-        bytes32 transactionId = processTransaction(_seller, _value, _isNative);
+        // Создаем платеж
+        bytes32 paymentId = createPayment(_seller, _amount, _isEth);
         
         // Обновляем информацию о покупке
-        TransactionHelper.Transaction storage transaction = transactions[transactionId];
-        transaction.transactionType = TransactionHelper.TransactionType.PURCHASE;
-        transaction.data = _itemId;
+        PaymentLibrary.Payment storage payment = payments[paymentId];
+        payment.paymentType = PaymentLibrary.PaymentType.PRODUCT;
+        payment.metadata = _productId;
         
-        emit ItemPurchased(transactionId, _itemId, _value, msg.sender, _seller);
-        
-        return transactionId;
-    }
-    
-    // Функции для отправки поддержки (донатов)
-    function donate(
-        address _receiver, 
-        string calldata _message,
-        uint256 _value,
-        bool _isNative
-    ) external payable returns (bytes32) {
-        // Проверка оплаты
-        validatePayment(_value, _isNative);
-        
-        // Создаем транзакцию
-        bytes32 transactionId = processTransaction(_receiver, _value, _isNative);
-        
-        // Обновляем информацию о поддержке
-        TransactionHelper.Transaction storage transaction = transactions[transactionId];
-        transaction.transactionType = TransactionHelper.TransactionType.SUPPORT;
-        transaction.data = _message;
-        
-        emit SupportSent(transactionId, _message, _value, msg.sender, _receiver);
-        
-        return transactionId;
-    }
-    
-    // Функции для регулярных платежей
-    function startRecurringPayment(
-        address _merchant, 
-        string calldata _planCode,
-        uint256 _value,
-        uint256 _period,
-        bool _isNative
-    ) external payable returns (bytes32) {
-        // Проверка оплаты
-        validatePayment(_value, _isNative);
-        
-        // Создаем начальную транзакцию
-        bytes32 transactionId = processTransaction(_merchant, _value, _isNative);
-        
-        // Обновляем информацию о транзакции
-        TransactionHelper.Transaction storage transaction = transactions[transactionId];
-        transaction.transactionType = TransactionHelper.TransactionType.RECURRING;
-        
-        // Создаем регулярный платеж
-        bytes32 paymentId = RecurringPaymentService.createRecurringPayment(
-            recurringPayments,
-            msg.sender,
-            _merchant,
-            _planCode,
-            _value,
-            _period,
-            _isNative,
-            block.timestamp
-        );
-        
-        // Связываем транзакцию с регулярным платежом
-        transaction.data = RecurringPaymentService.recurringPaymentIdToString(paymentId);
-        
-        emit RecurringPaymentStarted(paymentId, _planCode, _value, msg.sender, _merchant);
+        emit ProductPurchased(paymentId, _productId, _amount, msg.sender, _seller);
         
         return paymentId;
     }
     
-    function renewRecurringPayment(bytes32 _paymentId) external payable returns (bytes32) {
-        RecurringPaymentService.RecurringPayment storage payment = recurringPayments[_paymentId];
+    /**
+     * @dev Проверяет возможность платежа
+     * @param _amount Сумма платежа
+     * @param _isEth Использовать ETH или токен ERC20
+     */
+    function validatePayment(uint256 _amount, bool _isEth) private view {
+        if (_isEth) {
+            require(msg.value >= _amount, "Недостаточно ETH для платежа");
+        } else {
+            address tokenAddress = userInfo[msg.sender].preferredToken;
+            require(tokenAddress != address(0), "Не установлен предпочитаемый токен");
+        }
+    }
+    
+    /**
+     * @dev Отправка пожертвования
+     * @param _recipient Адрес получателя
+     * @param _message Сообщение
+     * @param _amount Сумма платежа
+     * @param _isEth Использовать ETH или токен ERC20
+     * @return ID платежа
+     */
+    function makeDonation(
+        address _recipient, 
+        string calldata _message,
+        uint256 _amount,
+        bool _isEth
+    ) external payable returns (bytes32) {
+        // Проверка оплаты
+        validatePayment(_amount, _isEth);
         
-        require(payment.client == msg.sender, "Только клиент может обновить платеж");
-        require(payment.enabled, "Регулярный платеж неактивен");
+        // Создаем платеж
+        bytes32 paymentId = createPayment(_recipient, _amount, _isEth);
+        
+        // Обновляем информацию о донате
+        PaymentLibrary.Payment storage payment = payments[paymentId];
+        payment.paymentType = PaymentLibrary.PaymentType.DONATION;
+        payment.metadata = _message;
+        
+        emit DonationMade(paymentId, _message, _amount, msg.sender, _recipient);
+        
+        return paymentId;
+    }
+    
+    /**
+     * @dev Создает подписку
+     * @param _provider Адрес поставщика услуг
+     * @param _planId ID плана подписки
+     * @param _amount Сумма первого платежа
+     * @param _intervalDays Интервал между платежами
+     * @param _isEth Использовать ETH или токен ERC20
+     * @return ID подписки
+     */
+    function createSubscription(
+        address _provider, 
+        string calldata _planId,
+        uint256 _amount,
+        uint256 _intervalDays,
+        bool _isEth
+    ) external payable returns (bytes32) {
+        // Проверка оплаты
+        validatePayment(_amount, _isEth);
+        
+        // Создаем начальный платеж для подписки
+        bytes32 paymentId = createPayment(_provider, _amount, _isEth);
+        
+        // Обновляем информацию о платеже
+        PaymentLibrary.Payment storage payment = payments[paymentId];
+        payment.paymentType = PaymentLibrary.PaymentType.SUBSCRIPTION;
+        
+        // Создаем подписку
+        bytes32 subscriptionId = SubscriptionManager.createSubscription(
+            subscriptions,
+            msg.sender,
+            _provider,
+            _planId,
+            _amount,
+            _intervalDays,
+            _isEth,
+            block.timestamp
+        );
+        
+        // Связываем платеж с подпиской
+        payment.metadata = SubscriptionManager.subscriptionIdToString(subscriptionId);
+        
+        emit SubscriptionStarted(subscriptionId, _planId, _amount, msg.sender, _provider);
+        
+        return subscriptionId;
+    }
+    
+    /**
+     * @dev Продлевает подписку
+     * @param _subscriptionId ID подписки
+     * @return ID платежа
+     */
+    function renewSubscription(bytes32 _subscriptionId) external payable returns (bytes32) {
+        SubscriptionManager.Subscription storage subscription = subscriptions[_subscriptionId];
+        
+        require(subscription.subscriber == msg.sender, "Только подписчик может продлить подписку");
+        require(subscription.active, "Подписка не активна");
         
         // Проверка оплаты
-        validatePayment(payment.amount, payment.isNativeToken);
+        if (subscription.isEth) {
+            require(msg.value >= subscription.amount, "Недостаточно ETH для продления подписки");
+        }
         
-        // Создаем транзакцию для обновления платежа
-        bytes32 transactionId = processTransaction(payment.merchant, payment.amount, payment.isNativeToken);
+        // Создаем платеж для продления подписки
+        bytes32 paymentId = createPayment(subscription.provider, subscription.amount, subscription.isEth);
         
-        // Обновляем информацию о транзакции
-        TransactionHelper.Transaction storage transaction = transactions[transactionId];
-        transaction.transactionType = TransactionHelper.TransactionType.RECURRING;
-        transaction.data = RecurringPaymentService.recurringPaymentIdToString(_paymentId);
+        // Обновляем информацию о платеже
+        PaymentLibrary.Payment storage payment = payments[paymentId];
+        payment.paymentType = PaymentLibrary.PaymentType.SUBSCRIPTION;
+        payment.metadata = SubscriptionManager.subscriptionIdToString(_subscriptionId);
         
         // Обновляем дату следующего платежа
-        payment.nextPaymentAt = block.timestamp + (payment.period * 1 days);
+        subscription.nextPaymentTimestamp = block.timestamp + (subscription.intervalDays * 1 days);
         
-        emit RecurringPaymentRenewed(_paymentId, payment.amount, msg.sender, payment.merchant);
+        emit SubscriptionRenewed(_subscriptionId, subscription.amount, msg.sender, subscription.provider);
         
-        return transactionId;
+        return paymentId;
     }
     
-    function cancelRecurringPayment(bytes32 _paymentId) external {
-        RecurringPaymentService.RecurringPayment storage payment = recurringPayments[_paymentId];
+    /**
+     * @dev Отменяет подписку
+     * @param _subscriptionId ID подписки
+     */
+    function cancelSubscription(bytes32 _subscriptionId) external {
+        SubscriptionManager.Subscription storage subscription = subscriptions[_subscriptionId];
         
-        require(payment.client == msg.sender || 
-                payment.merchant == msg.sender || 
-                msg.sender == admin, 
-                "Нет прав для отмены регулярного платежа");
-        require(payment.enabled, "Регулярный платеж уже неактивен");
+        require(subscription.subscriber == msg.sender || 
+                subscription.provider == msg.sender || 
+                msg.sender == owner, 
+                "Нет прав для отмены подписки");
+        require(subscription.active, "Подписка не активна");
         
-        RecurringPaymentService.disableRecurringPayment(recurringPayments, _paymentId);
+        SubscriptionManager.deactivateSubscription(subscriptions, _subscriptionId);
         
-        emit RecurringPaymentCancelled(_paymentId, payment.client, payment.merchant);
+        emit SubscriptionCancelled(_subscriptionId, subscription.subscriber, subscription.provider);
     }
     
-    // Функция для проверки оплаты
-    function validatePayment(uint256 _value, bool _isNative) private view {
-        if (_isNative) {
-            require(msg.value >= _value, "Недостаточно ETH для операции");
-        } else {
-            address tokenAddress = clientsInfo[msg.sender].defaultToken;
-            require(tokenAddress != address(0), "Не установлен токен по умолчанию");
-        }
-    }
-    
-    // Базовая функция для обработки транзакции
-    function processTransaction(
-        address _receiver, 
-        uint256 _value,
-        bool _isNative
+    /**
+     * @dev Создает новый платеж
+     * @param _recipient Адрес получателя
+     * @param _amount Сумма платежа
+     * @param _isEth Использовать ETH или токен ERC20
+     * @return ID платежа
+     */
+    function createPayment(
+        address _recipient, 
+        uint256 _amount,
+        bool _isEth
     ) internal returns (bytes32) {
-        require(_receiver != address(0), "Получатель не может быть нулевым адресом");
-        require(_value > 0, "Сумма должна быть больше нуля");
+        require(_recipient != address(0), "Получатель не может быть нулевым адресом");
+        require(_amount > 0, "Сумма должна быть больше нуля");
         
-        // Получаем nonce для новой транзакции
-        uint256 nonce = clientsInfo[msg.sender].transactionCount;
-        bytes32 transactionId = generateTransactionId(msg.sender, _receiver, nonce);
+        // Получаем nonce для нового платежа
+        uint256 nonce = userInfo[msg.sender].paymentCount;
+        bytes32 paymentId = generatePaymentId(msg.sender, _recipient, nonce);
         
-        // Обрабатываем токен, если это не нативная валюта
-        if (!_isNative) {
-            address tokenAddress = clientsInfo[msg.sender].defaultToken;
-            require(tokenAddress != address(0), "Не установлен токен по умолчанию");
+        // Обрабатываем токен, если это не ETH
+        if (!_isEth) {
+            address tokenAddress = userInfo[msg.sender].preferredToken;
+            require(tokenAddress != address(0), "Не установлен предпочитаемый токен");
             
-            ITokenStandard token = ITokenStandard(tokenAddress);
-            require(token.allowance(msg.sender, address(this)) >= _value, "Недостаточно одобренных токенов");
-            require(token.transferFrom(msg.sender, address(this), _value), "Перевод токена не удался");
+            IERC20 token = IERC20(tokenAddress);
+            require(token.allowance(msg.sender, address(this)) >= _amount, "Недостаточно разрешений для токена");
+            require(token.transferFrom(msg.sender, address(this), _amount), "Перевод токена не удался");
         }
         
-        // Создаем запись о транзакции
-        transactions[transactionId] = TransactionHelper.Transaction({
-            id: transactionId,
-            sender: msg.sender,
-            receiver: _receiver,
-            value: _isNative ? msg.value : _value,
-            isNative: _isNative,
-            tokenContract: _isNative ? address(0) : clientsInfo[msg.sender].defaultToken,
+        // Создаем запись о платеже
+        payments[paymentId] = PaymentLibrary.Payment({
+            id: paymentId,
+            payer: msg.sender,
+            recipient: _recipient,
+            amount: _isEth ? msg.value : _amount,
+            isEth: _isEth,
+            tokenAddress: _isEth ? address(0) : userInfo[msg.sender].preferredToken,
             timestamp: block.timestamp,
-            status: TransactionHelper.TransactionStatus.FINALIZED,
-            transactionType: TransactionHelper.TransactionType.BASIC,
-            data: ""
+            status: PaymentLibrary.PaymentStatus.COMPLETED,
+            paymentType: PaymentLibrary.PaymentType.GENERIC,
+            metadata: ""
         });
         
-        // Увеличиваем счетчик транзакций клиента
-        clientsInfo[msg.sender].transactionCount++;
+        // Увеличиваем счетчик платежей пользователя
+        userInfo[msg.sender].paymentCount++;
         
-        // Расчет комиссии и перевод средств
-        return finalizeTransaction(transactionId, _value, _isNative, _receiver);
+        // Завершаем платеж
+        return finalizePayment(paymentId, _recipient, _amount, _isEth);
     }
     
-    // Функция для перевода средств и расчета комиссии
-    function finalizeTransaction(
-        bytes32 _transactionId, 
-        uint256 _value,
-        bool _isNative,
-        address _receiver
+    /**
+     * @dev Завершает платеж, отправляя средства
+     * @param _paymentId ID платежа
+     * @param _recipient Адрес получателя
+     * @param _amount Сумма платежа
+     * @param _isEth Использовать ETH или токен ERC20
+     * @return ID платежа
+     */
+    function finalizePayment(
+        bytes32 _paymentId,
+        address _recipient,
+        uint256 _amount,
+        bool _isEth
     ) private returns (bytes32) {
         // Расчет комиссии
-        uint256 fee = calculateFee(_value, msg.sender);
-        uint256 finalValue = _value - fee;
+        uint256 commission = calculateCommission(_amount, msg.sender);
+        uint256 finalAmount = _amount - commission;
         
-        // Отправка средств получателю и комиссии
-        transferFunds(_isNative, _receiver, finalValue, feeCollector, fee);
+        // Отправка средств
+        transferFunds(_recipient, finalAmount, commissionWallet, commission, _isEth);
         
-        emit TransactionCreated(_transactionId, _value, msg.sender, _receiver);
-        emit TransactionProcessed(_transactionId, finalValue, fee, msg.sender, _receiver);
+        emit PaymentCreated(_paymentId, _amount, msg.sender, _recipient);
+        emit PaymentCompleted(_paymentId, finalAmount, commission, msg.sender, _recipient);
         
-        return _transactionId;
+        return _paymentId;
     }
     
-    // Функция для перевода средств
+    /**
+     * @dev Отправляет средства получателю и комиссию
+     * @param _recipient Адрес получателя
+     * @param _recipientAmount Сумма для получателя
+     * @param _commissionWallet Адрес для комиссии
+     * @param _commissionAmount Сумма комиссии
+     * @param _isEth Использовать ETH или токен ERC20
+     */
     function transferFunds(
-        bool _isNative,
-        address _receiver,
-        uint256 _receiverValue,
-        address _feeAddress,
-        uint256 _feeValue
+        address _recipient, 
+        uint256 _recipientAmount,
+        address _commissionWallet,
+        uint256 _commissionAmount,
+        bool _isEth
     ) private {
-        if (_isNative) {
+        if (_isEth) {
             // Отправка комиссии, если она не нулевая
-            if (_feeValue > 0) {
-                (bool feeSuccess, ) = _feeAddress.call{value: _feeValue}("");
-                require(feeSuccess, "Перевод комиссии не удался");
+            if (_commissionAmount > 0) {
+                (bool commissionSuccess, ) = _commissionWallet.call{value: _commissionAmount}("");
+                require(commissionSuccess, "Перевод комиссии не удался");
             }
             
             // Отправка средств получателю
-            (bool receiverSuccess, ) = _receiver.call{value: _receiverValue}("");
-            require(receiverSuccess, "Перевод получателю не удался");
+            (bool recipientSuccess, ) = _recipient.call{value: _recipientAmount}("");
+            require(recipientSuccess, "Перевод получателю не удался");
         } else {
-            ITokenStandard token = ITokenStandard(clientsInfo[msg.sender].defaultToken);
+            IERC20 token = IERC20(userInfo[msg.sender].preferredToken);
             
             // Отправка комиссии, если она не нулевая
-            if (_feeValue > 0) {
-                require(token.transfer(_feeAddress, _feeValue), "Перевод комиссии токеном не удался");
+            if (_commissionAmount > 0) {
+                require(token.transfer(_commissionWallet, _commissionAmount), "Перевод комиссии токеном не удался");
             }
             
             // Отправка средств получателю
-            require(token.transfer(_receiver, _receiverValue), "Перевод токеном получателю не удался");
+            require(token.transfer(_recipient, _recipientAmount), "Перевод токеном получателю не удался");
         }
     }
     
-    // Пользовательские настройки
-    function setDefaultToken(address _tokenAddress) external {
+    /**
+     * @dev Устанавливает предпочитаемый токен для пользователя
+     * @param _tokenAddress Адрес токена ERC20
+     */
+    function setPreferredToken(address _tokenAddress) external {
         require(_tokenAddress != address(0), "Адрес токена не может быть нулевым");
-        clientsInfo[msg.sender].defaultToken = _tokenAddress;
+        userInfo[msg.sender].preferredToken = _tokenAddress;
     }
     
-    // Геттеры (для получения информации)
-    function getTransaction(bytes32 _transactionId) external view returns (
-        address sender,
-        address receiver,
-        uint256 value,
-        bool isNative,
-        address tokenContract,
+    /**
+     * @dev Получает информацию о платеже
+     * @param _paymentId ID платежа
+     * @return Информация о платеже
+     */
+    function getPayment(bytes32 _paymentId) external view returns (
+        address payer,
+        address recipient,
+        uint256 amount,
+        bool isEth,
+        address tokenAddress,
         uint256 timestamp,
-        TransactionHelper.TransactionStatus status,
-        TransactionHelper.TransactionType transactionType,
-        string memory data
+        PaymentLibrary.PaymentStatus status,
+        PaymentLibrary.PaymentType paymentType,
+        string memory metadata
     ) {
-        TransactionHelper.Transaction storage transaction = transactions[_transactionId];
+        PaymentLibrary.Payment storage payment = payments[_paymentId];
         return (
-            transaction.sender,
-            transaction.receiver,
-            transaction.value,
-            transaction.isNative,
-            transaction.tokenContract,
-            transaction.timestamp,
-            transaction.status,
-            transaction.transactionType,
-            transaction.data
+            payment.payer,
+            payment.recipient,
+            payment.amount,
+            payment.isEth,
+            payment.tokenAddress,
+            payment.timestamp,
+            payment.status,
+            payment.paymentType,
+            payment.metadata
         );
     }
     
-    function getRecurringPayment(bytes32 _paymentId) external view returns (
-        address client,
-        address merchant,
-        string memory planCode,
+    /**
+     * @dev Получает информацию о подписке
+     * @param _subscriptionId ID подписки
+     * @return Информация о подписке
+     */
+    function getSubscription(bytes32 _subscriptionId) external view returns (
+        address subscriber,
+        address provider,
+        string memory planId,
         uint256 amount,
-        uint256 period,
-        uint256 createdAt,
-        uint256 nextPaymentAt,
-        bool isNativeToken,
-        bool enabled
+        uint256 intervalDays,
+        uint256 startTimestamp,
+        uint256 nextPaymentTimestamp,
+        bool isEth,
+        bool active
     ) {
-        RecurringPaymentService.RecurringPayment storage payment = recurringPayments[_paymentId];
+        SubscriptionManager.Subscription storage subscription = subscriptions[_subscriptionId];
         return (
-            payment.client,
-            payment.merchant,
-            payment.planCode,
-            payment.amount,
-            payment.period,
-            payment.createdAt,
-            payment.nextPaymentAt,
-            payment.isNativeToken,
-            payment.enabled
+            subscription.subscriber,
+            subscription.provider,
+            subscription.planId,
+            subscription.amount,
+            subscription.intervalDays,
+            subscription.startTimestamp,
+            subscription.nextPaymentTimestamp,
+            subscription.isEth,
+            subscription.active
         );
     }
     

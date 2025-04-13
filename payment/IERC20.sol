@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-interface ITokenStandard {
+/**
+ * @title IERC20 - Стандартный интерфейс для токенов ERC20
+ * @dev Интерфейс определяет основные функции для работы с токенами стандарта ERC20
+ */
+interface IERC20 {
     function transfer(address to, uint256 value) external returns (bool);
     function approve(address spender, uint256 value) external returns (bool);
     function transferFrom(address from, address to, uint256 value) external returns (bool);
