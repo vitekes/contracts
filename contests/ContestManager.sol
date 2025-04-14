@@ -290,7 +290,7 @@ library ContestManager {
 }
 
 // Требуется для компиляции библиотеки
-interface ParticipantManager {
+interface ParticipantStruct {
     enum ParticipantStatus { PARTICIPATED, WON, CLAIMED, LOST }
     struct Participant {
         address wallet;
