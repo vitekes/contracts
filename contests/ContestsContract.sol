@@ -6,8 +6,11 @@ import "./ParticipantManager.sol";
 import "./ContestManager.sol";
 import "./CommissionManager.sol";
 import "./PrizeManager.sol";
+import "./SafeMath.sol";
 
 contract ContestsContract {
+    using SafeMath for uint256;
+
     address public owner;
     address public commissionWallet;
     uint256 public commissionPercentage; // Процент комиссии (например, 100 = 1%, 1000 = 10%)
@@ -39,6 +42,8 @@ contract ContestsContract {
     }
 
     constructor(address _commissionWallet, uint256 _commissionPercentage) {
+        require(_commissionWallet != address(0), "Commission wallet cannot be zero address");
+        require(_commissionPercentage <= 10000, "Commission percentage cannot exceed 100%");
         owner = msg.sender;
         commissionWallet = _commissionWallet;
         commissionPercentage = _commissionPercentage;
@@ -65,13 +70,24 @@ contract ContestsContract {
         ContestManager.PrizeType prizeType,
         address tokenAddress
     ) external payable {
+        require(numberOfWinners > 0, "Number of winners must be greater than 0");
+        require(durationDays > 0, "Duration days must be greater than 0");
+        require(prizeAmount > 0, "Prize amount must be greater than 0");
+        
         if (prizeType == ContestManager.PrizeType.ETH) {
             require(msg.value >= prizeAmount, "Insufficient ETH sent for prize");
+            require(msg.value == prizeAmount, "Exact ETH amount required");
         } else if (prizeType == ContestManager.PrizeType.TOKEN) {
             require(tokenAddress != address(0), "Token address cannot be zero");
             IERC20 token = IERC20(tokenAddress);
-            require(token.allowance(msg.sender, address(this)) >= prizeAmount, "Insufficient token allowance");
+            uint256 allowanceBefore = token.allowance(msg.sender, address(this));
+            require(allowanceBefore >= prizeAmount, "Insufficient token allowance");
+            
+            uint256 balanceBefore = token.balanceOf(address(this));
             require(token.transferFrom(msg.sender, address(this), prizeAmount), "Token transfer failed");
+            uint256 balanceAfter = token.balanceOf(address(this));
+            
+            require(balanceAfter >= balanceBefore + prizeAmount, "Token transfer amount mismatch");
         } else {
             revert("Invalid prize type for money contest");
         }
@@ -330,7 +346,7 @@ contract ContestsContract {
         require(participant.status == ParticipantManager.ParticipantStatus.WON, "Not a winner");
         require(!participant.hasClaimed, "Prize already claimed");
 
-        // Расчет комиссии
+        // Расчет комиссии с использованием библиотеки CommissionManager
         uint256 commission = 0;
         if (participant.prizeAmount > 0) {
             commission = CommissionManager.calculateCommission(

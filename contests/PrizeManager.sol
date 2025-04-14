@@ -4,13 +4,23 @@ pragma solidity ^0.8.0;
 import "./IERC20.sol";
 import "./ContestManager.sol";
 import "./ParticipantManager.sol";
+import "./SafeMath.sol";
 
 library PrizeManager {
+    using SafeMath for uint256;
+    
     event PrizeClaimed(
         uint256 indexed contestId,
         address indexed winner,
         uint256 amount,
         string promocode
+    );
+    
+    // Добавляем событие из ContestManager для использования в нашем коде
+    event ContestPrizeWithdrawn(
+        uint256 indexed contestId, 
+        address indexed withdrawnBy, 
+        uint256 amount
     );
     
     // Распределение денежных призов
@@ -78,7 +88,7 @@ library PrizeManager {
         );
     }
     
-    // Получение денежного приза
+    // Получение денежного приза с улучшенными проверками
     function claimMoneyPrize(
         mapping(uint256 => mapping(uint256 => ParticipantManager.Participant)) storage participants,
         mapping(uint256 => ContestManager.Contest) storage contests,
@@ -87,12 +97,17 @@ library PrizeManager {
         address commissionWallet,
         uint256 commission
     ) internal {
+        require(commissionWallet != address(0), "Commission wallet cannot be zero address");
         ParticipantManager.Participant storage participant = participants[contestId][participantIndex];
+        require(participant.wallet != address(0), "Participant wallet cannot be zero address");
         ContestManager.Contest storage contest = contests[contestId];
         
-        uint256 finalAmount = participant.prizeAmount - commission;
+        uint256 finalAmount = participant.prizeAmount.sub(commission);
         
         if(contest.prizeType == ContestManager.PrizeType.ETH || contest.prizeType == ContestManager.PrizeType.MIXED) {
+            // Проверяем баланс контракта перед отправкой
+            require(address(this).balance >= finalAmount.add(commission), "Contract has insufficient ETH balance");
+            
             // Отправляем комиссию
             if(commission > 0) {
                 (bool commissionSuccess, ) = commissionWallet.call{value: commission}("");
@@ -103,7 +118,12 @@ library PrizeManager {
             (bool success, ) = participant.wallet.call{value: finalAmount}("");
             require(success, "Prize transfer failed");
         } else if(contest.prizeType == ContestManager.PrizeType.TOKEN) {
+            require(contest.tokenAddress != address(0), "Token address cannot be zero");
             IERC20 token = IERC20(contest.tokenAddress);
+            
+            // Проверяем баланс токенов контракта
+            uint256 contractBalance = token.balanceOf(address(this));
+            require(contractBalance >= finalAmount.add(commission), "Contract has insufficient token balance");
             
             // Отправляем комиссию
             if(commission > 0) {
@@ -185,6 +205,6 @@ library PrizeManager {
             require(token.transfer(recipient, remainingPrize), "Token withdrawal failed");
         }
         
-        emit ContestManager.ContestPrizeWithdrawn(contestId, recipient, remainingPrize);
+        emit ContestPrizeWithdrawn(contestId, recipient, remainingPrize);
     }
 } 
