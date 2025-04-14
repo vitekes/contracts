@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "./IERC20.sol";
+import "./ParticipantManager.sol";
 
 library ContestManager {
     enum PrizeType { ETH, TOKEN, PROMOCODE, MIXED }
@@ -290,15 +291,15 @@ library ContestManager {
 }
 
 // Требуется для компиляции библиотеки
-interface ParticipantStruct {
-    enum ParticipantStatus { PARTICIPATED, WON, CLAIMED, LOST }
-    struct Participant {
-        address wallet;
-        uint256 userId;
-        uint256 contestId;
-        ParticipantStatus status;
-        uint256 prizeAmount;
-        string promocode;
-        bool hasClaimed;
-    }
-} 
+//interface ParticipantStruct {
+//    enum ParticipantStatus { PARTICIPATED, WON, CLAIMED, LOST }
+//    struct Participant {
+//        address wallet;
+//        uint256 userId;
+//        uint256 contestId;
+//        ParticipantStatus status;
+//        uint256 prizeAmount;
+//        string promocode;
+//        bool hasClaimed;
+//    }
+//}
