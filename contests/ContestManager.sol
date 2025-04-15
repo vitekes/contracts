@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import "./IERC20.sol";
+import "./ParticipantManager.sol";
 
 library ContestManager {
     enum PrizeType { ETH, TOKEN, PROMOCODE, MIXED }
@@ -266,13 +267,13 @@ library ContestManager {
     function calculateRemainingPrize(
         mapping(uint256 => Contest) storage contests,
         uint256 contestId,
-        mapping(uint256 => mapping(uint256 => IParticipantManager.Participant)) storage participants
+        mapping(uint256 => mapping(uint256 => ParticipantManager.Participant)) storage participants
     ) internal view returns (uint256) {
         Contest storage contest = contests[contestId];
         uint256 remainingPrize = contest.prizeAmount;
         
         for(uint256 i = 0; i < contest.totalParticipants; i++) {
-            if(participants[contestId][i].status == IParticipantManager.ParticipantStatus.WON) {
+            if(participants[contestId][i].status == ParticipantManager.ParticipantStatus.WON) {
                 remainingPrize -= participants[contestId][i].prizeAmount;
             }
         }
@@ -288,17 +289,3 @@ library ContestManager {
         return contests[contestId];
     }
 }
-
-// Требуется для компиляции библиотеки
-interface IParticipantManager {
-    enum ParticipantStatus { PARTICIPATED, WON, CLAIMED, LOST }
-    struct Participant {
-        address wallet;
-        uint256 userId;
-        uint256 contestId;
-        ParticipantStatus status;
-        uint256 prizeAmount;
-        string promocode;
-        bool hasClaimed;
-    }
-} 

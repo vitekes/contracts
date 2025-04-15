@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+// Enable optimization with reduced runs (50) to optimize for deployment size
+// Настройка оптимизатора должна быть в настройках компилятора, а не в директиве pragma
+// pragma abicoder v2;
 
 import "./IERC20.sol";
 import "./ParticipantManager.sol";
@@ -15,6 +18,9 @@ contract ContestsContract {
     address public commissionWallet;
     uint256 public commissionPercentage; // Процент комиссии (например, 100 = 1%, 1000 = 10%)
 
+    // Вспомогательный контракт для разгрузки основного
+    address public participantContractAddress;
+
     // Список адресов, освобожденных от комиссии
     mapping(address => bool) public noCommissionAddresses;
 
@@ -27,6 +33,14 @@ contract ContestsContract {
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Only owner can call this function");
+        _;
+    }
+
+    modifier onlyParticipantContract() {
+        require(
+            msg.sender == participantContractAddress || msg.sender == owner, 
+            "Only participant contract or owner can call this function"
+        );
         _;
     }
 
@@ -49,13 +63,18 @@ contract ContestsContract {
         commissionPercentage = _commissionPercentage;
     }
 
+    function setParticipantContract(address _participantContract) external onlyOwner {
+        require(_participantContract != address(0), "Participant contract cannot be zero address");
+        participantContractAddress = _participantContract;
+    }
+
     // Функции управления комиссией
     function setCommissionWallet(address _newWallet) external onlyOwner {
-        CommissionManager.setCommissionWallet(commissionWallet, _newWallet);
+        commissionWallet = CommissionManager.setCommissionWallet(_newWallet);
     }
 
     function setCommissionPercentage(uint256 _newPercentage) external onlyOwner {
-        CommissionManager.setCommissionPercentage(commissionPercentage, _newPercentage);
+        commissionPercentage = CommissionManager.setCommissionPercentage(_newPercentage);
     }
 
     function setNoCommissionAddress(address _address, bool _status) external onlyOwner {
@@ -168,7 +187,7 @@ contract ContestsContract {
         );
     }
 
-    // Участие в конкурсе
+    // Участие в конкурсе - доступно также через вспомогательный контракт
     function joinContest(uint256 contestId, uint256 userId) external contestExists(contestId) contestActive(contestId) {
         ContestManager.Contest storage contest = contests[contestId];
         require(contest.totalParticipants < contest.numberOfWinners * 1000, "Contest is full");
@@ -336,7 +355,7 @@ contract ContestsContract {
         );
     }
 
-    // Получение приза
+    // Получение приза - доступно также через вспомогательный контракт
     function claimPrize(uint256 contestId, uint256 participantIndex) external contestExists(contestId) {
         ContestManager.Contest storage contest = contests[contestId];
         require(contest.status == ContestManager.ContestStatus.COMPLETED, "Contest is not completed");
@@ -479,7 +498,7 @@ contract ContestsContract {
         );
     }
 
-    // Геттеры
+    // Геттеры - доступны также через вспомогательный контракт
     function getContest(uint256 contestId) external view returns (ContestManager.Contest memory) {
         return ContestManager.getContest(contests, contestId);
     }

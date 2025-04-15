@@ -11,17 +11,17 @@ library CommissionManager {
     event NoCommissionAddressUpdated(address indexed _address, bool status);
     
     // Установка нового кошелька для комиссий
-    function setCommissionWallet(address storage commissionWallet, address _newWallet) internal {
+    function setCommissionWallet(address _newWallet) internal returns (address) {
         require(_newWallet != address(0), "Commission wallet cannot be zero address");
-        commissionWallet = _newWallet;
         emit CommissionWalletUpdated(_newWallet);
+        return _newWallet;
     }
     
     // Установка нового процента комиссии
-    function setCommissionPercentage(uint256 storage commissionPercentage, uint256 _newPercentage) internal {
+    function setCommissionPercentage(uint256 _newPercentage) internal returns (uint256) {
         require(_newPercentage <= 10000, "Commission cannot exceed 100%");
-        commissionPercentage = _newPercentage;
         emit CommissionPercentageUpdated(_newPercentage);
+        return _newPercentage;
     }
     
     // Управление адресами, освобожденными от комиссии
