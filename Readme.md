@@ -1,97 +1,133 @@
-# Инструкция по подключению смарт-контракта к веб-сайту
+# Система платежей на Ethereum
 
-## 1. Развертывание контракта
-Перед интеграцией на сайт, необходимо развернуть контракт в сети Ethereum (или другой EVM-совместимой сети). Это можно сделать через Remix, Hardhat или Foundry.
+Эта система контрактов предоставляет функциональность для обработки платежей, донатов и подписок на блокчейне Ethereum.
 
-### Способы развертывания
-#### Remix
-1. Перейдите на [Remix](https://remix.ethereum.org/).
-2. Создайте новый файл, вставьте код контракта.
-3. Скомпилируйте и разверните контракт, выбрав нужную сеть.
-4. Сохраните адрес развернутого контракта.
+## Структура контрактов
 
-#### Hardhat
-1. Создайте проект Hardhat (`npx hardhat` → создать скрипт деплоя).
-2. Включите контракт в `scripts/deploy.js`.
-3. Запустите `npx hardhat run scripts/deploy.js --network goerli` (или другую сеть).
+1. `PaymentSystem.sol` - основной контракт, реализующий функциональность платежей, донатов и подписок.
+2. `SubscriptionManager.sol` - библиотека для управления подписками.
+3. `PaymentLibrary.sol` - библиотека для обработки платежей.
 
-## 2. Установка необходимых библиотек
-На веб-сайте используйте `ethers.js` или `web3.js` для взаимодействия с контрактом.
+## Основные функции
 
-### Установка Ethers.js
-```sh
-npm install ethers
+### Оплата товаров
+```solidity
+function payForProduct(
+    uint256 productId,
+    address recipient,
+    address tokenAddress
+) external payable
+```
+- `productId` - ID товара
+- `recipient` - получатель платежа
+- `tokenAddress` - адрес токена (или address(0) для ETH)
+
+### Донаты
+```solidity
+function makeDonation(
+    address recipient,
+    uint256 recipientId,
+    address tokenAddress
+) external payable
+```
+- `recipient` - получатель доната
+- `recipientId` - ID получателя
+- `tokenAddress` - адрес токена (или address(0) для ETH)
+
+### Подписки
+```solidity
+function createSubscription(
+    address recipient,
+    uint256 recipientId,
+    uint256 productId,
+    uint256 monthlyAmount,
+    uint256 durationMonths,
+    address tokenAddress
+) external payable
+```
+- `recipient` - получатель платежей по подписке
+- `recipientId` - ID получателя
+- `productId` - ID продукта или сервиса
+- `monthlyAmount` - ежемесячная сумма платежа
+- `durationMonths` - продолжительность подписки в месяцах
+- `tokenAddress` - адрес токена (или address(0) для ETH)
+
+## Управление комиссиями
+
+```solidity
+function setCommissionWallet(address _newWallet) external onlyOwner
+function setCommissionPercentage(uint256 _newPercentage) external onlyOwner
 ```
 
-## 3. Подключение контракта к фронтенду
-Создайте файл `contract.js` и добавьте следующее:
-```js
-import { ethers } from "ethers";
+## Дополнительные функции
 
-const contractAddress = "ВАШ_КОНТРАКТНЫЙ_АДРЕС";
-const abi = [
-// Вставьте ABI контракта сюда (можно получить в Remix или Hardhat)
-];
-
-export const getContract = () => {
-  if (!window.ethereum) throw new Error("MetaMask не установлен");
-  const provider = new ethers.providers.Web3Provider(window.ethereum);
-  const signer = provider.getSigner();
-  return new ethers.Contract(contractAddress, abi, signer);
-};
+Отмена подписки:
+```solidity
+function cancelSubscription(uint256 subscriptionIndex) external
 ```
 
-## 4. Функция покупки билета
-В файле `App.js` добавьте:
-```js
-import { getContract } from "./contract";
-
-const buyTicket = async (contestId, amount, isETH) => {
-  try {
-    const contract = getContract();
-    const tx = isETH
-      ? await contract.buyTicket(contestId, true, { value: amount })
-      : await contract.buyTicket(contestId, false, amount);
-    await tx.wait();
-    console.log("Билет куплен!");
-  } catch (error) {
-    console.error("Ошибка покупки билета", error);
-  }
-};
+Обработка платежей по подпискам:
+```solidity
+function processSubscriptionPayments(address subscriber, uint256 subscriptionIndex) external
 ```
 
-## 5. Кнопка для покупки билета
-В файле `App.js`:
-```jsx
-<button onClick={() => buyTicket(1, ethers.utils.parseEther("0.01"), true)}>
-  Купить билет за ETH
-</button>
+Получение информации о платеже:
+```solidity
+function getPayment(uint256 paymentId) external view returns (PaymentLibrary.Payment memory)
 ```
 
-## 6. Вывод списка победителей
-Добавьте функцию:
-```js
-const declareWinners = async (contestId, winners, amounts) => {
-  try {
-    const contract = getContract();
-    const tx = await contract.declareWinners(contestId, winners, amounts);
-    await tx.wait();
-    console.log("Победители объявлены!");
-  } catch (error) {
-    console.error("Ошибка объявления победителей", error);
-  }
-};
+Получение подписок пользователя:
+```solidity
+function getUserSubscriptions(address user) external view returns (SubscriptionManager.Subscription[] memory)
 ```
 
-## 7. Функция для получения выигрыша
-```js
-const claimPrize = async (contestId) => {
-  try {
-    const contract = getContract();
-    const tx = await contract.claimPrize(contestId);
-    await tx.wait();
-    console.log("Выигрыш получен!");
-  } catch (error) {
-    console.error("Ошибка получения выигрыша", error);
-  }
-};
+## Преимущества модульного дизайна
+
+1. **Переиспользуемость кода** - общая логика платежей и подписок вынесена в библиотеки
+2. **Удобное обслуживание** - проще обновлять отдельные модули
+3. **Экономия газа** - библиотеки используют делегированный вызов (DELEGATECALL), что экономит газ
+4. **Читаемость кода** - чистая архитектура повышает понимание функциональности
+
+## Пример использования
+
+### Создание контракта
+```solidity
+PaymentSystem paymentSystem = new PaymentSystem(commissionWalletAddress, 500); // 5% комиссия
+```
+
+### Оплата товара ETH
+```solidity
+paymentSystem.payForProduct{value: 1 ether}(productId, merchantAddress, address(0));
+```
+
+### Оплата товара токенами
+```solidity
+// Сначала одобрите расходование токенов
+token.approve(address(paymentSystem), amount);
+// Затем выполните платеж
+paymentSystem.payForProduct(productId, merchantAddress, tokenAddress);
+```
+
+### Создание подписки
+```solidity
+// Подписка с оплатой ETH
+paymentSystem.createSubscription{value: monthlyAmount}(
+    serviceProviderAddress, 
+    providerId, 
+    productId,
+    monthlyAmount, 
+    12, // 12 месяцев
+    address(0)
+);
+
+// Подписка с оплатой токенами
+token.approve(address(paymentSystem), monthlyAmount);
+paymentSystem.createSubscription(
+    serviceProviderAddress, 
+    providerId,
+    productId, 
+    monthlyAmount, 
+    12, // 12 месяцев
+    tokenAddress
+);
+```
